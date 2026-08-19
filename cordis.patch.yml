@@ -1,0 +1,8 @@
+# dsh-dev-crew — bundle patch layer.
+#
+# 把本包装进 profile（dsh plugin --profile <name> add dsh-dev-crew）会将它
+# 追加到 dsh.profile.bundles，此 patch 随即作为该 bundle 的层被应用。
+# 下面这一行加载本包主入口作为 host 半部。
+- insert:
+    - id: dsh-dev-crew
+      name: dsh-dev-crew
