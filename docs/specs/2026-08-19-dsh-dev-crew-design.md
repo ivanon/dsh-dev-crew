@@ -1,13 +1,14 @@
 # dsh-dev-crew 设计文档
 
-> 状态：阶段一已实现并合入；阶段二、三待实施
+> 状态：三个阶段均已实现（阶段一已合入 master；阶段二、三在 feat/phase-2-3-methodology-and-ui 分支待合并）
 > 日期：2026-08-19
 > 目标运行时：DeepSeek Harness（dsh）0.1.0-rc.7
 >
-> 阶段一（第 3 节角色路由 + 第 8 节包形态）已交付：41 个**单元**测试 + 一次人工端到端验收。
-> 第 9 节列为最关键的**真实 Loader 组合测试尚未建立**，欠账见第 11 节。
+> 全部三阶段已交付：123 个测试（单元 + 真实 cordis 上下文组合测试 + 服务晚注册的时序回归），
+> 加上两轮真实宿主端到端验收。第 9 节列为最关键的组合测试已建立（真实 cordis 上下文，
+> 不含 cordis.yml 与 Loader 模块解析那一层，由真实安装验收承担）。
 > 实施过程中查证出的上游事实与由此产生的约束记录在
-> [docs/notes/2026-08-19-phase-1-outcome.md](../notes/2026-08-19-phase-1-outcome.md)，
+> [docs/notes/2026-08-19-implementation-outcome.md](../notes/2026-08-19-implementation-outcome.md)，
 > 其中影响后续设计的部分已回填进本文档相应章节。
 
 ---

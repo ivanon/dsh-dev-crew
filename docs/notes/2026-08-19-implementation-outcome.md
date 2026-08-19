@@ -1,4 +1,4 @@
-# 阶段一收尾：已交付什么，以及后续阶段开工前必须知道的事
+# 实施收尾记录：三个阶段查证出的上游事实与技术债
 
 > 日期：2026-08-19
 > 分支：`feat/phase-1-skeleton-and-roles`（17 个 commit，19 个文件，41 个测试）
@@ -125,3 +125,94 @@ profile 的 `pnpm-workspace.yaml` 写死 `nodeLinker: hoisted`，`healProfilesMo
 - `diffMounts` 的配置比对分支到那时才第一次成为活代码。它依赖两个前提：**键序稳定**、**`config` 对象引用跨同步稳定**。而 `applies: 'live'` + `scope.watch()` 恰恰会打破「config 在单次 `apply` 内不可变」这个当前成立的假设。改之前先补上那条 JSDoc，或直接换成结构化比较。
 - `ctx.webServer.register()` **不提供任何鉴权**。信任边界（校验 Host 头为回环地址、请求体大小上限）需插件自建，设计文档 7.1 已记录，实现时别丢。
 - 角色启停会改变工具集，使**全部会话的模型缓存前缀失效**。配置界面需就此给出明确提示：保存配置的实际代价是下一轮请求全量重新预填充。
+
+---
+
+# 阶段二、三补记（2026-08-19 实施后）
+
+阶段二（方法论 skill、产物目录初始化、纪律 gate）与阶段三（配置界面）实施完成，123 个测试。以下是这两个阶段查证出的、**代码本身读不出来**的上游事实与教训，与上文并列作为后续工作的输入。
+
+## 六、`ctx.get()` 分不清「服务不存在」与「服务还没加载完」
+
+这是本轮最贵的一课，同一个错误出现了**三次**（`webServer`、`settings`、`commands`）。
+
+`ctx.get('someService')` 是**一次性快照读取**。在 `apply()` 里用它判断可选服务是否存在，写出的是这样的代码：
+
+```ts
+const server = ctx.get('webServer')
+if (server === undefined) return () => {}   // 「优雅降级」
+```
+
+问题在于：服务**晚一步注册**时，这里同样返回 `undefined`。于是「该部署没有这个服务」与「这个服务还没加载完」被当成了同一件事，注册被永久静默错过 —— 没有报错、没有日志，`npm run check` 全绿，而功能从头到尾没工作过。
+
+**正确机制是 `ctx.inject(deps, callback)`**（cordis `registry.d.ts:111,185`，等价于 `ctx.plugin({ inject: deps, apply: callback })`）：
+
+- 依赖未就绪时停在 PENDING 的是**那个子插件**，主插件照常工作
+- 依赖就绪后 callback 自动执行，依赖消失时自动回收
+- 回调里必须用**回调参数那个 ctx** 注册效果，否则服务消失时不会正确回收
+
+**机制上不存在竞态窗口**：`ctx.reflect.provide()` 在提供方 fiber 变为 ACTIVE 时调用 `notify()`，而 `notify()` 会遍历**所有**声明了该服务名的 fiber 使其重新评估 epoch。这是由状态转换因果触发的响应式机制，与两个插件谁先执行无关。
+
+**不能把可选服务加进主插件的顶层 `inject`**：cordis 的 `Inject` 类型是 `(keyof M)[] | { [K]?: config }`，**没有 required/optional 之分**。headless 部署没有 `webServer`，加进去会让整个插件永久 PENDING —— 那比原缺陷更严重。
+
+**与 dsh 包规范的关系**：规范写的是「可选服务用 `ctx.get(name)`」。那条规范针对的是**读取服务实例**这个动作，是对的；而「注册一个需要长期有效的效果」对加载时序有额外要求，规范没有区分这两种场景。`tests/loader.test.ts` 里那三条「服务晚于插件就绪」的用例就是为此存在的 —— 有人照着规范把 `ctx.inject` 改回 `ctx.get` 时，它们会红。
+
+## 七、委派工具默认后台，只返回 id
+
+`dsh-tool-subagent` 在 `backgroundMode: continuable` 下，`run_in_background` **默认为 true**。调用立刻返回的是 `started subagent <id>`，**不是报告**；报告经 runtime 的完成通知到达。
+
+这条直接决定方法论正文怎么写。初版 `crew-converge.md` 写的是「拿到全部报告后分类阻塞项」，两个分支都会坏：
+
+- 用默认（后台）→ 模型拿到一串 id、看不到任何阻塞项 → **判定「无阻塞、收敛」**，正是收敛协议要防的假阳性
+- 传 `run_in_background: false` 走前台 → **不产生持久子代理 id** → `send_message` 复审从此不可能
+
+正文必须写明：保持后台默认、返回值是 id、等完成通知全部到齐再分类、用 `list_agents` 查看谁还在 running。
+
+## 八、`list_agents` 列的是子代理，不是工具
+
+`list_agents` 返回已存在的子代理会话，与「当前挂载了哪些工具」无关。预检门若用它确认角色工具是否就位，在流水线开始时必然拿到空列表。要看工具就看自己的工具清单。
+
+## 九、gate 的路径候选正则必须排除中文全角标点
+
+模型自然转述路径时会写「计划文件：docs/plans/x.md」或「按（docs/plans/x.md）实现」。若正则只排除 ASCII 标点，路径会被全角冒号/括号/逗号粘住而被误拒，**而拒绝理由不会提示原因**，模型可能反复重试。
+
+这条缺陷只有真实模型用中文说人话时才暴露 —— 单元测试里的路径字符串都是干净的。
+
+## 十、客户端契约（实测，无一条能从文档推出）
+
+- 客户端产物是**惰性 CJS**（`window.__ModuleLoader__.load({ id, factory })` 包装），不是 ESM
+- `package.json` 的 `dsh.client.inject` 是**客户端包名清单**，与运行时 `export const inject`（cordis 服务名）是**两套独立清单**
+- 宿主 `packages/host/apiproxy` 里有**硬编码的 settings 命名空间白名单**，第三方插件的命名空间不在其中 —— 所以插件自己的配置读写必须走自建 HTTP 路由，`settings.section` 只是挂载点
+- `dsh-context` 虽有客户端半部，但**不含 `settings.section` 用例**；带该用例的是 `dsh-at-file` 与 `dsh-better-sidebar`
+
+## 十一、settings 的写路径语义
+
+- `update(ns, patch, expectedRevision)` 深合并 patch 进用户 section，**先合并已持久化值再校验**
+- `replace(ns, section, ...)` 整体替换
+- 文档专门警告：**配置 UI 读的是 redacted 描述符，拿它重建 section 再整体 replace，会删掉 wire 从未返回的每一个 secret**
+
+由此得出一条容易踩的坑：**在 HTTP 层先用 `ConfigSchema()` 独立解析一次再写入，会把调用方省略的顶层字段填成 schema 默认值**。此后交给 `update()` 还是 `replace()` 结果完全一样 —— 深合并面对一个键齐全的对象，等同于整体替换。正确做法是把原始（可能不完整的）JSON 直接交给 `update()`，让 settings 服务自己的 merge-then-validate 处理。
+
+- `describe()` 作为 wire surface **必须传 `redactSecrets: true`**，且要确保脱敏结果真正接入流出 wire 的数据路径 —— 只在一条取 `revision` 的旁路上调用它，是形式满足、实质落空。
+- `SettingsScope` 上**没有 `dispose()` 方法**（只有 `get`/`watch`/`update`/`replace`）；注销由 `register()` 内部挂在调用方 fiber 的 `ctx.effect()` 负责。
+- `register()` 的 `ns` 参数要求 `Branded<'SettingsNamespace'>`，必须用 `settingsNamespace()` 工厂包装，裸 string 编译不过。
+- `SettingsRegisterOptions<T>.base` 的类型是 `Partial<T>`（注释即「entry-config subset」）。
+
+## 十二、`artifactDirs` 是无语义标签的字符串数组
+
+`crew_init` 返回 `created`/`skipped` 两个数组，各自只保留组内相对顺序。**混合切分时无法从返回值还原哪条路径对应 specs/plans/reports** —— `created=[P]`、`skipped=[S,R]` 有三种自洽排列。而 `artifactDirs` 本身也没有长度为 3 的校验。
+
+**插件自己都不知道哪一项是 reports。** 正文层面无解，正确的修法是把配置改成带语义键的结构（`{ specs, plans, reports }`）。当前的处置是让正文诚实承认无法推断、要求停下来问用户 —— 因为**一条有漏洞的规则比没有规则更糟**：没有规则时模型知道自己不知道，有了漏洞规则它会自信地把产物写进错目录，而且不会有任何报错。
+
+## 十三、阶段二三留下的债
+
+- **`artifactDirs` 应改为带语义键的配置结构**（见上条）
+- **客户端 `CrewSection` 未做浏览器级验收**：三态健康显示、保存失败保留输入、KV 缓存提示、零凭据字段四条判据均在代码层确认，但未在真实浏览器中人工核对
+- **UI 不能编辑 `artifactDirs` 与 `gate.plansDir`**：只读展示，改路径仍需手改配置文件
+- **`gate.enabled` 不支持热切换**：界面可编辑该开关，但需重载插件才生效（界面已加提示）
+- **`trustedHosts` 硬编码 `[]`**：企业内网部署无法扩展白名单，且无对应 Config 字段
+- **CSRF**：Host 白名单挡不住浏览器页面向 localhost 发 POST，当前定位是「仅本地信任环境」
+- **`process.cwd()` 作为 gate 围栏与初始化基准**：monorepo 子目录或远程工作区启动时可能错位
+- **大小写不敏感文件系统上的围栏比较**：`startsWith` 前缀比对未处理大小写差异
+- **skill 正文读不到运行时配置**：`pipeline.maxConvergenceRounds` 等只能靠正文写默认值缓解，根治需要一个只读的 `crew_status` 工具
+- **`crew_init` 的工具描述硬编码了默认目录名**，与可配置的 `artifactDirs` 可能给模型矛盾信号
