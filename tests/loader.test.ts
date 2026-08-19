@@ -96,6 +96,31 @@ class FakeSkills extends Service {
 }
 
 /**
+ * 最小 commands 替身：记录注册过的命令名。
+ *
+ * `register()` 的注销经 `this.ctx.effect()` 挂出，理由与上面的 `FakeTools` 完全
+ * 相同：`dsh-dev-crew` 通过 `ctx.get('commands')?.register(...)` 而非
+ * `ctx.commands.register(...)` 拿到这个服务，但 cordis 的 tracer/shadow 机制对
+ * `ctx.get()` 同样生效——`get()` 是 `reflect` 服务经 `ctx.mixin()` 挂到 `ctx` 上的
+ * 方法，调用时 `this` 被重绑定为发起调用的 fiber 的 ctx（这里是 `dsh-dev-crew`
+ * 自己的 ctx），返回值也带着同一个 tracker，因此其上的 `register()` 内部
+ * `this.ctx` 仍是调用方 ctx，`this.ctx.effect()` 把注销与 `dsh-dev-crew` 的 fiber
+ * 绑定。`commands` 不在 `inject` 声明里（可选服务），因此不像 `FakeTools`/
+ * `FakeSkills` 那样是每个用例的必需前置——只有本文件里显式验证命令入口的用例
+ * 才需要挂载它。
+ */
+class FakeCommands extends Service {
+  readonly registered = new Set<string>()
+  constructor(ctx: Context) { super(ctx, 'commands') }
+  register(definition: { name: string }) {
+    return this.ctx.effect(() => {
+      this.registered.add(definition.name)
+      return () => { this.registered.delete(definition.name) }
+    })
+  }
+}
+
+/**
  * 等待协调器的串行队列排空。
  *
  * 不用固定延迟：那既可能不够（慢机器上偶发失败）又总是浪费时间。协调器的
@@ -169,7 +194,30 @@ describe('plugin under a real cordis context', () => {
 
     const tools = ctx.get('tools') as unknown as FakeTools
     // crew_init 是与角色无关的产物目录初始化工具，不受任何角色启停影响，
-    // 因此始终挂载；这里只断言没有任何角色派生的委派工具挂载。
-    expect([...tools.registered].some(name => name.startsWith('subagent_'))).toBe(false)
+    // 因此始终挂载；断言整个已注册集合而不是「不含 subagent_ 前缀」，这样
+    // 若 crew_init 的挂载分支被误删或被套进错误的 if，这里也会失败，而不是
+    // 因为「碰巧没有角色工具」而继续通过。
+    expect([...tools.registered]).toEqual(['crew_init'])
+  })
+
+  it('registers /crew-init when a commands service is present, and removes it when the fiber disposes', async () => {
+    const ctx = new Context()
+    await ctx.plugin(FakeLlm)
+    await ctx.plugin(FakeTools)
+    await ctx.plugin(FakeSubagents)
+    await ctx.plugin(FakeSystemPrompt)
+    await ctx.plugin(FakeSkills)
+    await ctx.plugin(FakeCommands)
+
+    const fiber = ctx.plugin(crew, {})
+    await fiber
+    await drainCoordinator()
+
+    const commands = ctx.get('commands') as unknown as FakeCommands
+    expect([...commands.registered]).toEqual(['crew-init'])
+
+    await fiber.dispose()
+    await drainCoordinator()
+    expect([...commands.registered]).not.toContain('crew-init')
   })
 })
