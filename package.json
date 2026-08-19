@@ -4,6 +4,21 @@
   "description": "A DeepSeek Harness plugin that mounts one subagent delegation tool per configured role and model, each bound to its own model provider route.",
   "type": "module",
   "license": "MIT",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "dsh-bundle",
+    "subagent",
+    "agent",
+    "cordis"
+  ],
+  "homepage": "https://github.com/ivanon/dsh-dev-crew#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ivanon/dsh-dev-crew.git"
+  },
+  "bugs": { "url": "https://github.com/ivanon/dsh-dev-crew/issues" },
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",

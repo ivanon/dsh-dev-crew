@@ -74,6 +74,15 @@ profile 的 `pnpm-workspace.yaml` 写死 `nodeLinker: hoisted`，`healProfilesMo
 
 补 `peerDependencies` 反而可能让 pnpm 在 profile 里装出第二份 cordis，导致服务查找失败。官方教程的示例插件同样零依赖声明。
 
+**发布前实测确认（2026-08-19，pnpm 11.7.0 / dsh 0.1.0-rc.7）。** 此前的端到端验收用的 `crewtest` profile 是 `link:` 到工作目录，靠工作目录自己的 `node_modules` 解析，从未检验过安装态。用 `npm pack` 出 tarball 装进全新 profile 后：
+
+- `~/.dsh/profiles/node_modules/@deepseek-ai/` 下有 195 个符号链接指向 `<dsh 安装>/node_modules/@deepseek-ai/*`。该目录是每个 profile 目录的父级，所以从 `profiles/<name>/node_modules/dsh-dev-crew/lib/index.js` 向上查找必然命中。`NODE_PATH` 未设置，机制与它无关。
+- `@deepseek-ai/schemastery` 与 `cosmokit` **也在** in-box 链接里。把 schemastery 声明为 `dependencies` 会在 profile 里装出第二份并优先解析到它（距离更近），使 config schema 与宿主 Loader 分属两个 `Schema` 实例。
+- 零声明下 `dsh-settings`、`dsh-tools`、`dsh-tool-subagent`、`schemastery`、`cordis` 五个模块从真实安装位置 `import()` 全部成功；安装输出 `Packages: +1`，无警告。
+- 补 `peerDependencies` 后安装变成 `[WARN] Issues with peer dependencies found` —— pnpm 看不见 in-box 符号链接，判定 peer 未满足。警告对每个用户可见，且在 `auto-install-peers` 开启的环境会真的装出第二份。
+
+结论：**out-of-tree 插件对 in-box 包一律零声明**，`dependencies`、`peerDependencies` 都不写；只有 in-box 之外的真实第三方依赖才进 `dependencies`。这与仓库内部包用 `workspace:^` 声明 peer 的做法不同 —— monorepo 里 `workspace:^` 本身保证单实例，插件靠的是 profiles 级链接。
+
 ---
 
 ## 三、本阶段留下的债
