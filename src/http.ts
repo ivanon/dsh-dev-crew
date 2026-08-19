@@ -5,7 +5,6 @@ import type { Context } from '@deepseek-ai/cordis'
 // `Context.get(name: string): any` 重载，`server.register(...)` 的调用全在
 // `any` 上进行，与真实 `WebServer` 契约的偏差不会被 tsc 发现。
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import { Config as ConfigSchema } from './config.ts'
 import type { SkippedRoute } from './mount.ts'
 import type { Config } from './types.ts'
 
@@ -38,8 +37,14 @@ export interface CrewApiDeps {
   readonly readConfig: () => Config
   /** 当前命名空间的 revision，随每次 RAW section 变更单调递增。 */
   readonly readRevision: () => number
-  /** 写入配置；`expectedRevision` 不匹配时须抛出 `SETTINGS_CONFLICT`。 */
-  readonly writeConfig: (next: Config, expectedRevision: number) => Promise<void>
+  /**
+   * 合并写入一份（可能不完整的）配置补丁；`expectedRevision` 不匹配时须抛出
+   * `SETTINGS_CONFLICT`。校验发生在实现内部（`settings.update()` 自己的
+   * merge-then-validate 流水线），http.ts 不重复解析：调用方提交的补丁本就可能
+   * 只含部分顶层字段，一次独立于已持久化值的 schema 解析会把未提交的字段填成
+   * schema 默认值，而不是保留原值。
+   */
+  readonly writeConfig: (patch: object, expectedRevision: number) => Promise<void>
   readonly mountedToolNames: () => readonly string[]
   readonly skippedRoutes: () => readonly SkippedRoute[]
   readonly trustedHosts: readonly string[]
@@ -125,11 +130,14 @@ export function registerCrewApi(ctx: Context, deps: CrewApiDeps): () => void {
             send(400, { ok: false, error: { code: 'MISSING_REVISION', message: 'expectedRevision is required; read it from settings.get' } })
             return
           }
-          // 校验后再写：HTTP 是不可信输入边界，未校验的 JSON 会把非法配置
-          // 写进用户文档，而错误要到下次插件加载才暴露。这里的 cast 把 JSON 解析
-          // 出的 `unknown` 交给 schema 校验/强制——不是绕过校验，校验紧随其后。
-          const candidate = ConfigSchema(parsed.config as Partial<Config> | undefined)
-          await deps.writeConfig(candidate, parsed.expectedRevision)
+          if (typeof parsed.config !== 'object' || parsed.config === null) {
+            send(400, { ok: false, error: { code: 'INVALID_CONFIG', message: 'config must be a JSON object' } })
+            return
+          }
+          // 写入前必须校验：HTTP 是不可信输入边界。校验发生在 `deps.writeConfig`
+          // 内部（`settings.update()` 自己对 schema 的校验），而不是在这里独立
+          // 再解析一次——后者会把调用方省略的顶层字段固化成 schema 默认值。
+          await deps.writeConfig(parsed.config, parsed.expectedRevision)
           send(200, { ok: true, value: { config: deps.readConfig(), revision: deps.readRevision() } })
         } catch (error: unknown) {
           if (typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'SETTINGS_CONFLICT') {

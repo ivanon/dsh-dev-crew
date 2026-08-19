@@ -4,6 +4,9 @@ import { describe, expect, it } from 'vitest'
 import { isTrustedHost, registerCrewApi } from '../src/http.ts'
 import type { Config } from '../src/types.ts'
 
+/** 超过 `src/http.ts` 的 `MAX_BODY_BYTES`（64KB）。 */
+const OVERSIZED_BODY = 'x'.repeat(64 * 1024 + 1)
+
 describe('isTrustedHost', () => {
   const trusted: string[] = []
 
@@ -147,8 +150,10 @@ describe('crew api routes', () => {
     expect(result.payload.error?.code).toBe('REVISION_CONFLICT')
   })
 
-  it('rejects a config that fails schema validation', async () => {
-    const handler = buildTestHandler({ revision: 7 })
+  it('maps a schema validation failure from writeConfig to INVALID_CONFIG', async () => {
+    // 校验现在发生在 `deps.writeConfig` 内部（真实实现里是 `settings.update()`
+    // 自己对 schema 的校验），http.ts 只负责把非冲突错误映射成 400。
+    const handler = buildTestHandler({ revision: 7, writeError: new Error('pipeline.maxConvergenceRounds must be >= 1') })
     const result = await invoke(handler, {
       method: 'POST',
       url: '/crew/api/settings.update',
@@ -156,6 +161,28 @@ describe('crew api routes', () => {
     })
     expect(result.status).toBe(400)
     expect(result.payload.error?.code).toBe('INVALID_CONFIG')
+  })
+
+  it('rejects a non-object config with INVALID_CONFIG before calling writeConfig', async () => {
+    const handler = buildTestHandler({ revision: 7 })
+    const result = await invoke(handler, {
+      method: 'POST',
+      url: '/crew/api/settings.update',
+      body: JSON.stringify({ config: 'not-an-object', expectedRevision: 7 }),
+    })
+    expect(result.status).toBe(400)
+    expect(result.payload.error?.code).toBe('INVALID_CONFIG')
+  })
+
+  it('rejects a body over 64KB with 413 before parsing it', async () => {
+    const handler = buildTestHandler({ revision: 7 })
+    const result = await invoke(handler, {
+      method: 'POST',
+      url: '/crew/api/settings.update',
+      body: OVERSIZED_BODY,
+    })
+    expect(result.status).toBe(413)
+    expect(result.payload.error?.code).toBe('BODY_TOO_LARGE')
   })
 
   it('returns the current revision from settings.get', async () => {

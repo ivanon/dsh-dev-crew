@@ -135,17 +135,36 @@ export function apply(ctx: Context, config: ConfigType): void {
   // （`WEB_SETTINGS_NAMESPACES`，见 packages/host/apiproxy/src/api-proxy.ts）内，
   // 加入清单是宿主应用的决定，不是注册插件能单方面做到的；因此配置读写必须走
   // 本插件自建的 HTTP 路由，客户端界面（若交付）也通过它读写，而非
-  // `ctx.settingsScope`。写路径用 `replace()` 而非 `update()`：HTTP 请求体
-  // 携带的是校验后的完整配置，而非要合并的局部 patch。
+  // `ctx.settingsScope`。
+  //
+  // 读取本命名空间当前的脱敏描述符（`SettingsDescriptor`，已解析值在 `.value`
+  // 字段）。两条 HTTP 路由都要经它，而不是直接读闭包变量 `current`：
+  // 1）`current` 只在 `registerCrewSettings` 的 `onChange` 回调里赋值，那个回调由
+  //    `scope.watch()` 异步触发，不保证在一次 `settings.update()` 的 await 完成
+  //    前跑完——写后立即读 `current` 可能回显写入前的旧值。
+  // 2）`describe({ redactSecrets: true })` 是 dsh 规定每个 wire surface 都必须
+  //    调用的入口：本插件的 schema 目前没有 `role('secret')` 字段所以无害，但这
+  //    条路径是将来任何人往 schema 里加密钥字段时的唯一防线——直接返回 `current`
+  //    会绕开脱敏，把明文密钥发到浏览器。
+  const describeSelf = () => ctx.get('settings')
+    ?.describe({ redactSecrets: true })
+    .find(descriptor => descriptor.ns === SETTINGS_NAMESPACE)
+
   ctx.effect(() => registerCrewApi(ctx, {
-    readConfig: () => current,
-    readRevision: () => ctx.get('settings')
-      ?.describe({ redactSecrets: true })
-      .find(descriptor => descriptor.ns === SETTINGS_NAMESPACE)?.revision ?? 0,
-    writeConfig: async (next, expectedRevision) => {
+    // 未组合 settings 服务（如某些 headless 部署）时回退到入口配置 `current`。
+    readConfig: () => (describeSelf()?.value as ConfigType | undefined) ?? current,
+    readRevision: () => describeSelf()?.revision ?? 0,
+    writeConfig: async (patch, expectedRevision) => {
       const settings = ctx.get('settings')
       if (settings === undefined) throw new Error('no settings provider composed')
-      await settings.replace(SETTINGS_NAMESPACE, next, expectedRevision)
+      // `update()`（合并局部 patch）而非 `replace()`（整体替换）：配置界面读到的
+      // 是 §7.1 提到的脱敏描述符，若以此重建整份 section 再 wholesale replace，
+      // 会把 wire 从未返回的每一个密钥字段一并清空——dsh-settings 的 README 专门
+      // 警告过这个场景。`update()` 的 merge-then-validate 会先合并进已持久化的
+      // 用户 section 再校验，调用方未提交的字段保留原值而不是被 schema 默认值
+      // 覆盖；这条校验同时满足「写入前必须用 ConfigSchema 校验」的要求，http.ts
+      // 不需要再独立解析一次。
+      await settings.update(SETTINGS_NAMESPACE, patch, expectedRevision)
     },
     mountedToolNames: () => coordinator.mountedToolNames(),
     skippedRoutes: () => lastSkipped,
