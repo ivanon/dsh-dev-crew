@@ -83,4 +83,8 @@ type CrewRoleArrayOutput = Schemastery.TypeT<typeof CrewRoleSchema>[]
 // always present after the schema fills in the default.
 export const Config: Schema<Partial<ConfigType>, ConfigType> = Schema.object({
   roles: Schema.array(CrewRoleSchema).default(BUILTIN_ROLES as unknown as CrewRoleArrayOutput),
+  gate: Schema.object({
+    enabled: Schema.boolean().default(true),
+    plansDir: Schema.string().default('docs/plans'),
+  }).default({ enabled: true, plansDir: 'docs/plans' }),
 })

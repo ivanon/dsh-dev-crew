@@ -4,6 +4,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import * as subagentTool from '@deepseek-ai/dsh-tool-subagent'
 import { Config } from './config.ts'
 import { CrewCoordinator } from './coordinator.ts'
+import { registerCrewGate } from './gate.ts'
 import type { SkippedRoute } from './mount.ts'
 import type { Config as ConfigType } from './types.ts'
 
@@ -49,6 +50,16 @@ export function apply(ctx: Context, config: ConfigType): void {
   })
 
   ctx.effect(() => () => { void coordinator.dispose() })
+
+  if (config.gate.enabled) {
+    ctx.effect(() => registerCrewGate(ctx, {
+      // 精确匹配工具命名规则，不能用 startsWith('subagent_implementer')：
+      // 那会把自定义角色 `implementer-v2` 的工具也当成 implementer。
+      implementerToolNames: () => coordinator.mountedToolNames()
+        .filter(name => name === 'subagent_implementer' || name.startsWith('subagent_implementer_')),
+      options: () => ({ plansDir: config.gate.plansDir, cwd: process.cwd() }),
+    }))
+  }
 
   void coordinator.sync(config.roles)
   ctx.on('llm/adapters-updated', () => { void coordinator.sync(config.roles) })

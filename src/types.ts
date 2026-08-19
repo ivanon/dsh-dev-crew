@@ -35,4 +35,11 @@ export interface CrewRole {
 /** 插件配置。 */
 export interface Config {
   roles: CrewRole[]
+  /** 纪律 gate 配置。 */
+  gate: {
+    /** 是否启用。关闭只移除运行时强制，skill 正文仍要求传递路径。 */
+    enabled: boolean
+    /** plans 目录，相对路径按插件进程的 cwd 解析。 */
+    plansDir: string
+  }
 }
