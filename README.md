@@ -6,6 +6,14 @@
 
 ## 安装
 
+发布前（尚未上架 npm），请用本地路径安装：
+
+```sh
+dsh plugin --profile <你的 profile> add <本仓库绝对路径>
+```
+
+发布后可改为按包名安装：
+
 ```sh
 dsh plugin --profile <你的 profile> add dsh-dev-crew
 ```
@@ -41,7 +49,8 @@ dsh plugin --profile <你的 profile> add dsh-dev-crew
 `subagent_reviewer_ds`、`subagent_reviewer_kimi` 三个工具。
 
 `provider` 必须是 Models 设置页中已就绪的路由。未配置或不存在的路由不会挂载
-工具，启动时会有一行说明原因的警告。
+工具；插件会通过 `ctx.logger` 记录一行说明原因的警告，但该警告在当前 headless
+一次性执行模式下不会打印到终端（见「已知限制」）。
 
 内置三个角色 `implementer` / `reviewer` / `researcher`，各自带有写好的 persona
 与工具范围，默认全部停用 —— 因为路由取决于你自己配置了哪些 provider。
@@ -51,6 +60,11 @@ dsh plugin --profile <你的 profile> add dsh-dev-crew
 - 角色的启停会改变工具集，使全部会话的模型缓存前缀失效，下一轮请求需重新预填充。
 - 子代理后端固定为 `spawn`（干净上下文）。不提供 fork：fork 的前缀复用收益会被
   continuable 子代理装入请求头部的内容抵消。
+- 路由不可用时对应的 `subagent_<role>` 工具不会挂载，插件会调用
+  `ctx.logger().warn()` 记录原因，但在 `dsh --profile <name> "<task>"` 这类
+  headless 一次性执行模式下，该日志当前不会打印到终端（宿主未接控制台输出
+  exporter，消息只留在 cordis 的内存日志缓冲区）。判断路由是否生效，请以对应
+  `subagent_<role>` 工具是否出现在工具列表中为准，而非等待一行警告文本。
 
 ## 许可
 
