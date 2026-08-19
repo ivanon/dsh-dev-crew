@@ -1,3 +1,11 @@
+// 用裸的同步 node:fs，不是 ctx.fs：ToolGuard 的签名是同步的
+// (`(execution) => string | undefined`)，而 ctx.fs 的方法是异步的（沙箱策略
+// 需要跨越 IPC/网络等边界）。guard 无法 await，所以只能用同步 API 才能在
+// 单次同步调用里做完这条判据要求的全部检查。这是已权衡接受的取舍：判据只做
+// 本地只读的存在性与文件类型判断，不读取文件内容，绕过 ctx.fs 沙箱策略的
+// 代价局限于此。不要把这里“修正”成 ctx.fs——改完要么编译不过（返回 Promise
+// 而不是 string | undefined），要么被迫把检查改成 fire-and-forget、guard 永远
+// 放行。
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { resolve, sep } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
