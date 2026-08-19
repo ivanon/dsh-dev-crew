@@ -19,8 +19,16 @@ export interface CrewSectionProps {
   close: () => void
 }
 
-/** 一个模型路由在界面上呈现的三态健康 + 未启用第四态。 */
-type DisplayHealth = 'ready' | 'unconfigured' | 'missing' | 'disabled'
+/**
+ * 一个模型路由在界面上呈现的健康态。
+ *
+ * `ready`/`unconfigured`/`missing` 三态由宿主的 `/health` 快照决定，`disabled`
+ * 由角色自身的 `enabled` 决定，`unknown` 是「宿主还不知道这个配置」——工具名
+ * 既不在 `mounted` 也不在 `skipped` 里。最后一态必须与 `missing` 分开：把
+ * 「未知」显示成「不存在」是一个错误的确定断言，而刚保存尚未重挂、或本地草稿
+ * 尚未提交时都会落到这里。
+ */
+type DisplayHealth = 'ready' | 'unconfigured' | 'missing' | 'disabled' | 'unknown'
 
 /**
  * 推导一个模型条目对应的工具名。
@@ -34,8 +42,15 @@ function toolNameFor(role: CrewRole, model: RoleModel): string {
   return role.models.length === 1 ? `subagent_${role.id}` : `subagent_${role.id}_${model.alias}`
 }
 
-/** 判定一个模型路由的界面健康态。 */
-function displayHealth(
+/**
+ * 判定一个模型路由的界面健康态。
+ * @param role - 草稿中的角色。
+ * @param model - 该角色下的模型条目。
+ * @param mounted - 宿主当前实际挂载的工具名。
+ * @param skipped - 宿主跳过的路由及原因。
+ * @returns 该条目的界面健康态；宿主两份快照都不认识这个工具名时为 `unknown`。
+ */
+export function displayHealth(
   role: CrewRole,
   model: RoleModel,
   mounted: readonly string[],
@@ -45,7 +60,8 @@ function displayHealth(
   const toolName = toolNameFor(role, model)
   if (mounted.includes(toolName)) return 'ready'
   const entry = skipped.find(candidate => candidate.toolName === toolName)
-  return entry?.reason === 'unconfigured' ? 'unconfigured' : 'missing'
+  if (entry === undefined) return 'unknown'
+  return entry.reason === 'unconfigured' ? 'unconfigured' : 'missing'
 }
 
 const HEALTH_LABEL: Record<DisplayHealth, string> = {
@@ -53,6 +69,28 @@ const HEALTH_LABEL: Record<DisplayHealth, string> = {
   unconfigured: '⚠ 未配置',
   missing: '⚠ 不存在',
   disabled: '○ 未启用',
+  unknown: '○ 待生效',
+}
+
+/**
+ * 剔除每个角色的 `persona` 与 `toolFilter`，用于提交前的草稿净化。
+ *
+ * 界面从不编辑这两个字段，但草稿来自 `/settings.get` 的**已填充**配置——`roles`
+ * 的 schema 默认值就是完整的 `BUILTIN_ROLES`，含 persona 与 toolFilter。原样回写
+ * 会把内置模板整体物化进用户设置层，此后该角色永久脱离模板演进：0.1.0 的
+ * `str_replace_editor` 缺陷正因如此无法通过升级自动修复。
+ *
+ * 剔除是安全的，因为这两个字段的最终值只有两个来源，都不依赖用户层：组合层
+ * （profile 的 cordis.patch.yml）显式写出的值，或 `mount.ts` 按角色 id 填充的内置
+ * 模板。用户层留空即落回二者之一，而非落空。
+ * @param config - 待提交的草稿。
+ * @returns 每个角色都不含 `persona` 与 `toolFilter` 的副本。
+ */
+export function withoutTemplateFields(config: Config): Config {
+  return {
+    ...config,
+    roles: config.roles.map(({ persona: _persona, toolFilter: _toolFilter, ...rest }) => rest),
+  }
 }
 
 /** 深拷贝一份配置草稿，使编辑不直接改动已提交的状态。 */
@@ -70,22 +108,33 @@ export function CrewSection(_props: CrewSectionProps): ReactNode {
   const [saveError, setSaveError] = useState<string | undefined>(undefined)
   const [saving, setSaving] = useState(false)
 
+  /**
+   * 重新拉取宿主的挂载快照。
+   *
+   * 独立于 `load`，因为保存之后也必须重拉：settings 是 `applies: 'live'`，写入
+   * 后宿主立即重挂工具集，而 `mounted`/`skipped` 若停留在页面打开时的那一份，
+   * 新配置对应的工具名永远查不到，界面会一直显示保存前的状态。
+   */
+  const loadHealth = (): Promise<void> =>
+    callCrewApi<{ mounted: string[]; skipped: SkippedRoute[] }>('health').then(result => {
+      if (result.ok && result.value !== undefined) {
+        setMounted(result.value.mounted)
+        setSkipped(result.value.skipped)
+      }
+    })
+
   const load = (): void => {
     setLoadError(undefined)
     void Promise.all([
       callCrewApi<{ config: Config; revision: number }>('settings.get', {}),
-      callCrewApi<{ mounted: string[]; skipped: SkippedRoute[] }>('health'),
-    ]).then(([settingsResult, healthResult]) => {
+      loadHealth(),
+    ]).then(([settingsResult]) => {
       if (!settingsResult.ok || settingsResult.value === undefined) {
         setLoadError(settingsResult.error?.message ?? 'failed to load configuration')
         return
       }
       setDraft(cloneConfig(settingsResult.value.config))
       setRevision(settingsResult.value.revision)
-      if (healthResult.ok && healthResult.value !== undefined) {
-        setMounted(healthResult.value.mounted)
-        setSkipped(healthResult.value.skipped)
-      }
     })
   }
 
@@ -121,7 +170,7 @@ export function CrewSection(_props: CrewSectionProps): ReactNode {
     setSaving(true)
     setSaveError(undefined)
     void callCrewApi<{ config: Config; revision: number }>('settings.update', {
-      config: draft,
+      config: withoutTemplateFields(draft),
       expectedRevision: revision,
     }).then(result => {
       setSaving(false)
@@ -134,6 +183,8 @@ export function CrewSection(_props: CrewSectionProps): ReactNode {
       }
       setDraft(cloneConfig(result.value.config))
       setRevision(result.value.revision)
+      // 写入已生效，工具集已重挂：重拉快照，否则健康态停留在保存前的那一份。
+      void loadHealth()
     })
   }
 
