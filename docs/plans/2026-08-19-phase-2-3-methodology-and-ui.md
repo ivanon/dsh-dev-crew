@@ -41,8 +41,8 @@
 | `tests/gate.test.ts` | 二 | 路径解析五步算法与围栏 |
 | `tests/init.test.ts` | 二 | 幂等、不覆盖、路径可配 |
 | `tests/skills.test.ts` | 二 | 四份 skill 注册与 invocation 策略 |
-| `tests/settings.test.ts` | 三 | 配置解析与 revision 冲突 |
-| `tests/http.test.ts` | 三 | 信任边界、请求体上限、方法限制 |
+| `tests/settings.test.ts` | 三 | 配置解析与变更转发 |
+| `tests/http.test.ts` | 三 | 信任边界、请求体上限、方法限制、revision 冲突、schema 校验 |
 
 ---
 
@@ -339,6 +339,9 @@ function adviseSkipped(entry: SkippedRoute): string {
 export function apply(ctx: Context, config: ConfigType): void {
   const logger = ctx.logger('dsh-dev-crew')
   let lastSkippedKey = ''
+  // 保留最近一次的跳过清单：阶段三的健康查询路由要读它，补上 headless 下
+  // logger 输出不可见留下的可观测性缺口。
+  let lastSkipped: readonly SkippedRoute[] = []
 
   const coordinator = new CrewCoordinator({
     mount: async spec => {
@@ -350,6 +353,7 @@ export function apply(ctx: Context, config: ConfigType): void {
       configurable: ctx.llm.listConfigurableProviders(),
     }),
     onSkipped: skipped => {
+      lastSkipped = skipped
       // 拓扑通知在启动阶段连续到达；仅在跳过集合真正变化时输出。
       const key = JSON.stringify(skipped)
       if (key === lastSkippedKey) return
@@ -385,12 +389,15 @@ git commit -m "refactor: 抽出可测的挂载协调器
 
 ---
 
-### Task 2: 真实 Loader 组合测试
+### Task 2: 真实 cordis 上下文组合测试
 
 **Files:**
 - Create: `tests/loader.test.ts`
-- Create: `tests/fixtures/crew-test.cordis.yml`
-- Modify: `package.json`（devDependencies 追加 Loader 及其依赖）
+- Modify: `package.json`（devDependencies 追加 `@deepseek-ai/dsh-subagent`）
+
+**关于命名**：设计文档第 9 节写的是「真实 Loader 组合测试」。本任务实际交付的是**真实 cordis 上下文**下的组合测试：手工构造 `Context`、注入三个服务替身、用 `ctx.plugin()` 挂载真实插件与真实委派工具。它覆盖了「插件真的能在 cordis 生命周期里注册与卸载」这条路径，但**不覆盖** `cordis.yml` 的解析与 Loader 的模块解析。
+
+这是有意的范围选择：Loader 路径的额外覆盖面（YAML 解析、bare specifier 解析）由 Task 9 的真实安装验收承担，而把 Loader 拉进单元测试需要构造 profile 目录结构与模块解析钩子，成本远高于它能多抓到的缺陷。**不要在提交信息或报告里把它称作「Loader 测试」** —— 那会让人以为设计第 9 节已经满足。
 
 **Interfaces:**
 - Consumes: 完整插件（`src/index.ts`）
@@ -404,7 +411,7 @@ dsh 的 ACP 事故记录是这条测试存在的理由：178 个单元测试全�
 
 Run:
 ```bash
-npm install -D @deepseek-ai/cordis-plugin-loader@0.1.0-rc.7 @deepseek-ai/dsh-subagent@0.1.0-rc.7
+npm install -D @deepseek-ai/dsh-subagent@0.1.0-rc.7
 ```
 
 若解析失败，检查是否所有 `@deepseek-ai/*` 都在同一版本线（见 Global Constraints）。
@@ -440,6 +447,17 @@ class FakeSubagents extends Service {
   capabilities() { return { outputSchema: true, depthLimit: true, toolFilter: true, persona: true } }
 }
 
+/**
+ * 等待协调器的串行队列排空。
+ *
+ * 不用固定延迟：那既可能不够（慢机器上偶发失败）又总是浪费时间。协调器的
+ * 每次 sync 都是微任务链，连续让出两轮事件循环即可保证它们全部结算。
+ */
+async function drainCoordinator(): Promise<void> {
+  await new Promise(resolve => setImmediate(resolve))
+  await new Promise(resolve => setImmediate(resolve))
+}
+
 describe('plugin under a real cordis context', () => {
   it('registers a role tool and removes it when the fiber disposes', async () => {
     const ctx = new Context()
@@ -456,14 +474,13 @@ describe('plugin under a real cordis context', () => {
       }],
     })
     await fiber
-    // 让协调器的串行队列排空
-    await new Promise(resolve => setTimeout(resolve, 20))
+    await drainCoordinator()
 
     const tools = ctx.get('tools') as unknown as FakeTools
     expect([...tools.registered]).toContain('subagent_implementer')
 
     await fiber.dispose()
-    await new Promise(resolve => setTimeout(resolve, 20))
+    await drainCoordinator()
     expect([...tools.registered]).not.toContain('subagent_implementer')
 
     await ctx.stop()
@@ -484,7 +501,7 @@ describe('plugin under a real cordis context', () => {
       }],
     })
     await fiber
-    await new Promise(resolve => setTimeout(resolve, 20))
+    await drainCoordinator()
 
     const tools = ctx.get('tools') as unknown as FakeTools
     expect([...tools.registered]).not.toContain('subagent_implementer')
@@ -501,7 +518,7 @@ describe('plugin under a real cordis context', () => {
 
     const fiber = ctx.plugin(crew, {})
     await fiber
-    await new Promise(resolve => setTimeout(resolve, 20))
+    await drainCoordinator()
 
     const tools = ctx.get('tools') as unknown as FakeTools
     expect(tools.registered.size).toBe(0)
@@ -527,9 +544,12 @@ Expected: 54 个测试通过。
 git add tests/loader.test.ts package.json package-lock.json
 git commit -m "test: 真实 cordis 上下文下的组合测试
 
-设计文档第 9 节列为最关键、阶段一欠着的一项。替身只覆盖 llm/tools/
-subagents 三个服务，插件本身与委派工具走真实加载路径，因此能回答
-「工具确实注册 / fiber dispose 后确实消失」——这是人工 E2E 无法重放的。"
+替身只覆盖 llm/tools/subagents 三个服务，插件本身与委派工具走真实的
+cordis 挂载路径，因此能回答「工具确实注册 / fiber dispose 后确实消失」
+——这是人工 E2E 无法重放的。
+
+不覆盖 cordis.yml 解析与 Loader 的模块解析：那部分由 Task 9 的真实
+安装验收承担。"
 ```
 
 ---
@@ -765,8 +785,10 @@ export function registerCrewGate(ctx: Context, deps: GateDeps): () => void {
 ```ts
   if (config.gate.enabled) {
     ctx.effect(() => registerCrewGate(ctx, {
+      // 精确匹配工具命名规则，不能用 startsWith('subagent_implementer')：
+      // 那会把自定义角色 `implementer-v2` 的工具也当成 implementer。
       implementerToolNames: () => coordinator.mountedToolNames()
-        .filter(name => name.startsWith('subagent_implementer')),
+        .filter(name => name === 'subagent_implementer' || name.startsWith('subagent_implementer_')),
       options: () => ({ plansDir: config.gate.plansDir, cwd: process.cwd() }),
     }))
   }
@@ -1732,6 +1754,58 @@ export function specKey(spec: MountSpec): string {
 Run: `npm run test -- tests/mount.test.ts`
 Expected: 全部通过（既有 27 + specKey 5 = 32）。既有的「config 变化触发重挂」用例必须仍然通过 —— 它验证的是语义变化，不是键序。
 
+- [ ] **Step 3b: 补齐配置模型缺失的字段**
+
+设计文档第 7 节的界面草图含「收敛轮数上限」，3.3 节写明「轮数上限是配置项」，但阶段一的 `Config` 里没有这个字段 —— 阶段三的界面无处可绑。现在补上。
+
+`src/types.ts` 的 `Config` 追加：
+
+```ts
+  /** 流水线参数。 */
+  pipeline: {
+    /** 每个评审环节的收敛轮数上限。达到上限仍有阻塞项则转遗留清单。 */
+    maxConvergenceRounds: number
+  }
+```
+
+`src/config.ts` 的 schema 追加：
+
+```ts
+  pipeline: Schema.object({
+    maxConvergenceRounds: Schema.number().min(1).max(10).default(3),
+  }).default({ maxConvergenceRounds: 3 }),
+```
+
+默认值 3 的来源：supermode 完整模式用 3 轮、轻量模式用 2 轮。本产品的评审者数量可配，取较宽的一档作默认，由用户按实际收敛速度调整。
+
+**同时更新 `tests/config.test.ts`**，为本阶段新增的三个字段各加一条默认值断言：
+
+```ts
+  it('supplies pipeline defaults', () => {
+    expect(new Config({}).pipeline.maxConvergenceRounds).toBe(3)
+  })
+
+  it('supplies gate defaults', () => {
+    const gate = new Config({}).gate
+    expect(gate.enabled).toBe(true)
+    expect(gate.plansDir).toBe('docs/plans')
+  })
+
+  it('supplies artifact directory defaults', () => {
+    expect(new Config({}).artifactDirs).toEqual(['docs/specs', 'docs/plans', 'docs/reports'])
+  })
+
+  it('rejects a convergence limit outside the allowed range', () => {
+    expect(() => new Config({ pipeline: { maxConvergenceRounds: 0 } })).toThrow()
+  })
+```
+
+新增字段不更新 schema 测试，回归会在很久以后才被发现 —— 那时已经没人记得默认值本该是什么。
+
+**`crew-converge.md` 引用「配置的轮数上限」时不写死数字**，正文已如此措辞，无需改动。
+
+**`artifactDirs` 与 `gate.plansDir` 的关系**：前者是 `crew_init` 创建的目录清单，后者是 gate 围栏的目录。默认下后者是前者的成员，但两者可以分别配置 —— 用户可能把 plans 放在别处。界面上两者分开呈现，不做联动；不一致时以各自的用途为准，gate 只认 `gate.plansDir`。
+
 - [ ] **Step 4: 写 tests/settings.test.ts**
 
 ```ts
@@ -1858,7 +1932,7 @@ gate 的 `options()` 闭包同步改为读 `current.gate`，使配置变更后 p
 - [ ] **Step 7: 全量检查并提交**
 
 Run: `npm run check`
-Expected: 86 个测试通过（77 + specKey 5 + settings 4）。
+Expected: 90 个测试通过（77 + config 4 + specKey 5 + settings 4）。
 
 ```bash
 git add src/settings.ts src/mount.ts src/index.ts tests/settings.test.ts tests/mount.test.ts
@@ -1933,6 +2007,105 @@ describe('isTrustedHost', () => {
     expect(isTrustedHost('dev.internal:8080', ['dev.internal'])).toBe(true)
   })
 })
+
+/** 构造一对最小的 req/res 替身，返回 res 收到的状态码与解析后的 body。 */
+function invoke(handler: (req: never, res: never) => Promise<void>, options: {
+  method: string
+  url: string
+  host?: string
+  body?: string
+}): Promise<{ status: number; payload: { ok: boolean; error?: { code: string }; value?: unknown } }> {
+  return new Promise(resolve => {
+    const listeners: Record<string, ((chunk?: unknown) => void)[]> = {}
+    const req = {
+      method: options.method,
+      url: options.url,
+      headers: { host: options.host ?? 'localhost:3080' },
+      on(event: string, cb: (chunk?: unknown) => void) {
+        ;(listeners[event] ??= []).push(cb)
+        if (event === 'end') {
+          queueMicrotask(() => {
+            if (options.body !== undefined) {
+              for (const on of listeners.data ?? []) on(Buffer.from(options.body))
+            }
+            for (const on of listeners.end ?? []) on()
+          })
+        }
+      },
+    }
+    const res = {
+      statusCode: 200,
+      setHeader() {},
+      end(body?: string) {
+        resolve({ status: res.statusCode, payload: JSON.parse(body ?? '{}') })
+      },
+    }
+    void handler(req as never, res as never)
+  })
+}
+
+describe('crew api routes', () => {
+  // registerCrewApi 把 handler 交给 webServer；测试直接取出它调用。
+  // 具体取法依 webServer 替身的实现而定，实施时在此处构造一个记录 handler
+  // 的替身 server 并从 ctx.get('webServer') 返回。
+
+  it('rejects settings.update without an expectedRevision', async () => {
+    const handler = buildTestHandler({ revision: 7 })
+    const result = await invoke(handler, {
+      method: 'POST',
+      url: '/crew/api/settings.update',
+      body: JSON.stringify({ config: { roles: [] } }),
+    })
+    expect(result.status).toBe(400)
+    expect(result.payload.error?.code).toBe('MISSING_REVISION')
+  })
+
+  it('maps a settings conflict to REVISION_CONFLICT', async () => {
+    const conflict = Object.assign(new Error('stale'), { code: 'SETTINGS_CONFLICT' })
+    const handler = buildTestHandler({ revision: 7, writeError: conflict })
+    const result = await invoke(handler, {
+      method: 'POST',
+      url: '/crew/api/settings.update',
+      body: JSON.stringify({ config: { roles: [] }, expectedRevision: 3 }),
+    })
+    expect(result.status).toBe(409)
+    expect(result.payload.error?.code).toBe('REVISION_CONFLICT')
+  })
+
+  it('rejects a config that fails schema validation', async () => {
+    const handler = buildTestHandler({ revision: 7 })
+    const result = await invoke(handler, {
+      method: 'POST',
+      url: '/crew/api/settings.update',
+      body: JSON.stringify({ config: { pipeline: { maxConvergenceRounds: 0 } }, expectedRevision: 7 }),
+    })
+    expect(result.status).toBe(400)
+    expect(result.payload.error?.code).toBe('INVALID_CONFIG')
+  })
+
+  it('returns the current revision from settings.get', async () => {
+    const handler = buildTestHandler({ revision: 7 })
+    const result = await invoke(handler, { method: 'POST', url: '/crew/api/settings.get' })
+    expect(result.status).toBe(200)
+    expect((result.payload.value as { revision: number }).revision).toBe(7)
+  })
+
+  it('rejects an untrusted host before doing any work', async () => {
+    const handler = buildTestHandler({ revision: 7 })
+    const result = await invoke(handler, {
+      method: 'POST',
+      url: '/crew/api/settings.get',
+      host: 'evil.com',
+    })
+    expect(result.status).toBe(403)
+    expect(result.payload.error?.code).toBe('UNTRUSTED_HOST')
+  })
+})
+```
+
+`buildTestHandler` 由实施者编写：构造一个记录 handler 的 `webServer` 替身，用它调 `registerCrewApi`，返回捕获到的 handler。它需要接受 `{ revision, writeError? }` 以驱动上面五个用例。把它写在测试文件顶部，不要为它单独建文件。
+
+```ts
 ```
 
 - [ ] **Step 2: 写 src/http.ts**
@@ -1969,7 +2142,10 @@ export function isTrustedHost(host: string | undefined, trusted: readonly string
 /** HTTP 路由的外部依赖。 */
 export interface CrewApiDeps {
   readonly readConfig: () => Config
-  readonly writeConfig: (next: Config) => Promise<void>
+  /** 当前命名空间的 revision，随每次 RAW section 变更单调递增。 */
+  readonly readRevision: () => number
+  /** 写入配置；`expectedRevision` 不匹配时须抛出 `SETTINGS_CONFLICT`。 */
+  readonly writeConfig: (next: Config, expectedRevision: number) => Promise<void>
   readonly mountedToolNames: () => readonly string[]
   readonly skippedRoutes: () => readonly SkippedRoute[]
   readonly trustedHosts: readonly string[]
@@ -2020,7 +2196,7 @@ export function registerCrewApi(ctx: Context, deps: CrewApiDeps): () => void {
       }
 
       if (path.endsWith('/settings.get')) {
-        send(200, { ok: true, value: deps.readConfig() })
+        send(200, { ok: true, value: { config: deps.readConfig(), revision: deps.readRevision() } })
         return
       }
 
@@ -2041,10 +2217,25 @@ export function registerCrewApi(ctx: Context, deps: CrewApiDeps): () => void {
           return
         }
         try {
-          await deps.writeConfig(JSON.parse(body) as Config)
-          send(200, { ok: true, value: deps.readConfig() })
+          const parsed = JSON.parse(body) as { config?: unknown; expectedRevision?: unknown }
+          if (typeof parsed.expectedRevision !== 'number') {
+            send(400, { ok: false, error: { code: 'MISSING_REVISION', message: 'expectedRevision is required; read it from settings.get' } })
+            return
+          }
+          // 校验后再写：HTTP 是不可信输入边界，未校验的 JSON 会把非法配置
+          // 写进用户文档，而错误要到下次插件加载才暴露。
+          const candidate = ConfigSchema(parsed.config)
+          await deps.writeConfig(candidate, parsed.expectedRevision)
+          send(200, { ok: true, value: { config: deps.readConfig(), revision: deps.readRevision() } })
         } catch (error: unknown) {
-          send(409, { ok: false, error: { code: 'WRITE_FAILED', message: String(error) } })
+          if ((error as { code?: unknown }).code === 'SETTINGS_CONFLICT') {
+            send(409, {
+              ok: false,
+              error: { code: 'REVISION_CONFLICT', message: 'the configuration changed since you loaded it; reload and reapply your edits' },
+            })
+            return
+          }
+          send(400, { ok: false, error: { code: 'INVALID_CONFIG', message: String(error) } })
         }
         return
       }
@@ -2058,17 +2249,20 @@ export function registerCrewApi(ctx: Context, deps: CrewApiDeps): () => void {
 - [ ] **Step 3: 跑 http 测试**
 
 Run: `npm run test -- tests/http.test.ts`
-Expected: 7 个测试通过。
+Expected: 12 个测试通过（isTrustedHost 7 + 路由 5）。
 
 - [ ] **Step 4: 在 src/index.ts 接入 HTTP 路由**
 
 ```ts
   ctx.effect(() => registerCrewApi(ctx, {
     readConfig: () => current,
-    writeConfig: async next => {
+    readRevision: () => ctx.get('settings')
+      ?.describe({ redactSecrets: true })
+      .find(descriptor => descriptor.ns === SETTINGS_NAMESPACE)?.revision ?? 0,
+    writeConfig: async (next, expectedRevision) => {
       const settings = ctx.get('settings')
       if (settings === undefined) throw new Error('no settings provider composed')
-      await settings.update(SETTINGS_NAMESPACE, next)
+      await settings.update(SETTINGS_NAMESPACE, next, expectedRevision)
     },
     mountedToolNames: () => coordinator.mountedToolNames(),
     skippedRoutes: () => lastSkipped,
@@ -2076,7 +2270,9 @@ Expected: 7 个测试通过。
   }))
 ```
 
-`lastSkipped` 在 `onSkipped` 回调中记录一份，供健康路由读取。
+`lastSkipped` 已在 Task 1 的 `apply()` 中引入并在 `onSkipped` 回调里赋值，此处直接读。
+
+**`describe()` 必须传 `redactSecrets: true`**：dsh 的设置服务规定每个 wire surface 都要这样调用。本插件当前的配置里没有 `role('secret')` 字段，但这条规矩管的是「将来有人往 schema 里加了一个密钥字段」那一天 —— 那时没人会记得回来补这个参数。
 
 - [ ] **Step 5: 客户端 spike**
 
@@ -2259,7 +2455,7 @@ git commit -m "docs: 阶段二三的使用说明与已知限制"
 
 ## 完成判据
 
-- `npm run check` 全绿，测试总数不少于 93。
+- `npm run check` 全绿，测试总数不少于 102。
 - 四份 skill 在真实宿主中注册成功，`crew-converge` 不出现在人可见的命令面。
 - `crew_init` 与 `/crew-init` 均可创建目录且幂等。
 - 纪律 gate 在无 plan 路径时拒绝、有合法路径时放行、路径穿越时拒绝。
