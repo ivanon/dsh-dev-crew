@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { BUILTIN_ROLES } from '../src/config.ts'
 import { diffMounts, planMounts, toolNameFor } from '../src/mount.ts'
 import type { CrewRole } from '../src/types.ts'
 
@@ -118,6 +119,132 @@ describe('planMounts', () => {
     })]
     const spec = planMounts(roles, live, configurable).specs[0]!
     expect('maxTokens' in spec.config.agentOptions).toBe(false)
+  })
+
+  describe('builtin template fill-in', () => {
+    const builtinImplementer = BUILTIN_ROLES.find(entry => entry.id === 'implementer')!
+
+    it('fills the builtin persona for a builtin id that supplies none', () => {
+      const roles = [role({
+        id: 'implementer',
+        models: [{ alias: 'default', provider: 'deepseek-official', model: 'm' }],
+      })]
+      const spec = planMounts(roles, live, configurable).specs[0]!
+      expect(spec.config.persona).toBe(builtinImplementer.persona)
+    })
+
+    it('keeps a user persona instead of the builtin one', () => {
+      const roles = [role({
+        id: 'implementer',
+        persona: 'mine',
+        models: [{ alias: 'default', provider: 'deepseek-official', model: 'm' }],
+      })]
+      const spec = planMounts(roles, live, configurable).specs[0]!
+      expect(spec.config.persona).toBe('mine')
+    })
+
+    it('omits the persona key entirely for a non-builtin id that supplies none', () => {
+      const roles = [role({
+        id: 'custom',
+        models: [{ alias: 'default', provider: 'deepseek-official', model: 'm' }],
+      })]
+      const spec = planMounts(roles, live, configurable).specs[0]!
+      expect('persona' in spec.config).toBe(false)
+      expect('toolFilter' in spec.config).toBe(false)
+    })
+
+    it('fills the builtin toolFilter for a builtin id that supplies none', () => {
+      const roles = [role({
+        id: 'implementer',
+        models: [{ alias: 'default', provider: 'deepseek-official', model: 'm' }],
+      })]
+      const spec = planMounts(roles, live, configurable).specs[0]!
+      expect(spec.config.toolFilter?.deny).toEqual(builtinImplementer.toolFilter!.deny)
+    })
+
+    it('replaces the builtin toolFilter wholesale when the user supplies one', () => {
+      const roles = [role({
+        id: 'reviewer',
+        toolFilter: { allow: ['read'] },
+        models: [{ alias: 'default', provider: 'deepseek-official', model: 'm' }],
+      })]
+      const spec = planMounts(roles, live, configurable).specs[0]!
+      expect(spec.config.toolFilter).toEqual({ allow: ['read'] })
+    })
+  })
+
+  describe('mutual crew-tool deny', () => {
+    it('denies every other mounted crew tool but not the instance itself', () => {
+      const roles = [
+        role({ id: 'implementer', models: [{ alias: 'default', provider: 'deepseek-official', model: 'm' }] }),
+        role({ id: 'reviewer', models: [{ alias: 'default', provider: 'kimi-coding', model: 'k3' }] }),
+      ]
+      const [implementer, reviewer] = planMounts(roles, live, configurable).specs
+      expect(implementer!.config.toolFilter!.deny).toContain('subagent_reviewer')
+      expect(implementer!.config.toolFilter!.deny).not.toContain('subagent_implementer')
+      expect(reviewer!.config.toolFilter!.deny).toContain('subagent_implementer')
+      expect(reviewer!.config.toolFilter!.deny).not.toContain('subagent_reviewer')
+    })
+
+    it('keeps the role deny entries ahead of the injected crew names, deduplicated', () => {
+      const roles = [
+        role({ id: 'implementer', models: [{ alias: 'default', provider: 'deepseek-official', model: 'm' }] }),
+        role({ id: 'reviewer', models: [{ alias: 'default', provider: 'kimi-coding', model: 'k3' }] }),
+      ]
+      const spec = planMounts(roles, live, configurable).specs[0]!
+      expect(spec.config.toolFilter!.deny)
+        .toEqual([...BUILTIN_ROLES.find(entry => entry.id === 'implementer')!.toolFilter!.deny!, 'subagent_reviewer'])
+    })
+
+    it('creates a toolFilter for a role that has none when another crew tool mounts', () => {
+      const roles = [
+        role({ id: 'custom', models: [{ alias: 'default', provider: 'deepseek-official', model: 'm' }] }),
+        role({ id: 'other', models: [{ alias: 'default', provider: 'kimi-coding', model: 'k3' }] }),
+      ]
+      const spec = planMounts(roles, live, configurable).specs[0]!
+      expect(spec.config.toolFilter).toEqual({ deny: ['subagent_other'] })
+    })
+
+    it('never denies a tool name that was skipped, since restrict rejects unregistered names', () => {
+      const roles = [
+        role({ id: 'implementer', models: [{ alias: 'default', provider: 'deepseek-official', model: 'm' }] }),
+        role({ id: 'researcher', models: [{ alias: 'default', provider: 'qwen', model: 'Qwen3' }] }),
+      ]
+      const plan = planMounts(roles, live, configurable)
+      expect(plan.skipped.map(entry => entry.toolName)).toEqual(['subagent_researcher'])
+      expect(plan.specs[0]!.config.toolFilter!.deny).not.toContain('subagent_researcher')
+    })
+  })
+
+  describe('duplicate tool names', () => {
+    it('throws when two enabled roles share an id', () => {
+      const roles = [
+        role({ id: 'reviewer', models: [{ alias: 'default', provider: 'deepseek-official', model: 'm' }] }),
+        role({ id: 'reviewer', models: [{ alias: 'default', provider: 'kimi-coding', model: 'k3' }] }),
+      ]
+      expect(() => planMounts(roles, live, configurable))
+        .toThrow(/role "reviewer" alias "default".*subagent_reviewer/s)
+    })
+
+    it('throws when one role repeats an alias', () => {
+      const roles = [role({
+        id: 'reviewer',
+        models: [
+          { alias: 'ds', provider: 'deepseek-official', model: 'm' },
+          { alias: 'ds', provider: 'kimi-coding', model: 'k3' },
+        ],
+      })]
+      expect(() => planMounts(roles, live, configurable))
+        .toThrow(/alias "ds".*subagent_reviewer_ds/s)
+    })
+
+    it('throws even when the colliding routes are not ready to mount', () => {
+      const roles = [
+        role({ id: 'solo', models: [{ alias: 'default', provider: 'nope', model: 'm' }] }),
+        role({ id: 'solo', models: [{ alias: 'default', provider: 'nope', model: 'm' }] }),
+      ]
+      expect(() => planMounts(roles, live, configurable)).toThrow(/subagent_solo/)
+    })
   })
 })
 
