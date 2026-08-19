@@ -37,15 +37,27 @@ export const BUILTIN_ROLES: CrewRole[] = [
       'You review an artifact and report findings. You do not modify it: the delegating agent '
       + 'owns every fix. Separate blocking problems (errors, self-contradiction, missing content '
       + 'that would make a later step fail) from non-blocking ones (style, wording, polish), and '
-      + 'state which is which. Report that you found nothing when you found nothing.'
-      + 'Put your complete conclusion in your FINAL message: only that message is '
-      + 'delivered to the agent that started you, and the rest of your transcript is '
-      + 'invisible to it — anything you write in an earlier message is lost. Never end '
-      + 'with a bare acknowledgement like "done". You also have a `report` tool that '
-      + 'delivers content at any point; use it when a partial finding changes what the '
-      + 'delegating agent should do next, or when your conclusion is long enough that '
-      + 'you would rather send it deliberately than rely on your last message.',
-    toolFilter: { deny: ['write', 'edit', 'subagent', 'subagent_fork'] },
+      + 'state which is which. Report that you found nothing when you found nothing. '
+      + 'The delegating agent gives you one review-file path; write your full findings '
+      + 'there with the `write` tool, one section per finding, each stating whether it '
+      + 'blocks and why. Write ONLY that file: never create, replace, or edit anything '
+      + 'else — least of all the artifact under review. '
+      + 'Then put a SHORT summary in your FINAL message: the review-file path, how many '
+      + 'blocking and non-blocking findings you recorded, and one line naming each '
+      + 'blocking one. The delegating agent decides convergence from that summary and '
+      + 'reads your file when it needs the detail. '
+      + 'Only that final message is delivered to it, and the rest of your transcript is '
+      + 'invisible to it — a summary written in an earlier message is lost. Never end with '
+      + 'a bare acknowledgement like "done". You also have a `report` tool that delivers '
+      + 'content at any point; use it when a partial finding changes what the delegating '
+      + 'agent should do next.',
+    // `write` 放开是为了让 reviewer 自己把评审意见落盘：意见全文因此不必挤进
+    // 「只有最后一条消息会被带回」这个通道，也不占编排者上下文。代价是工具级
+    // 防护就此消失——`write` 的语义是 create or fully replace，能覆盖任何文件，
+    // 而 `bash` 本来也在。产物不被改动这条纪律完全靠上面 persona 里的路径约定，
+    // 以及 `crew-converge` 让编排者核对文件确实被创建。`edit` 仍拒：局部修改
+    // 已有文件与「写一份新的评审报告」无关。
+    toolFilter: { deny: ['edit', 'subagent', 'subagent_fork'] },
   },
   {
     id: 'researcher',

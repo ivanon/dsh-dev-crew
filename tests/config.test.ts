@@ -125,6 +125,37 @@ describe('builtin role tool filters', () => {
   })
 })
 
+describe('reviewer write access', () => {
+  it('lets the reviewer write, so it can land its own review file', () => {
+    // 意见由 reviewer 自己落盘，全文因此不必挤进「只有最后一条消息会被带回」
+    // 那个通道。代价记录在 config.ts 对应的注释里：`write` 的语义是 create or
+    // fully replace，工具级已无法阻止它覆盖产物，纪律靠 persona 的路径约定。
+    const reviewer = BUILTIN_ROLES.find(role => role.id === 'reviewer')
+    expect(reviewer?.toolFilter?.deny).not.toContain('write')
+  })
+
+  it('still denies edit, which has nothing to do with writing a new report', () => {
+    const reviewer = BUILTIN_ROLES.find(role => role.id === 'reviewer')
+    expect(reviewer?.toolFilter?.deny).toContain('edit')
+  })
+
+  it('keeps the researcher unable to write', () => {
+    // 只有 reviewer 需要落盘；researcher 的产出直接回给编排者。
+    const researcher = BUILTIN_ROLES.find(role => role.id === 'researcher')
+    expect(researcher?.toolFilter?.deny).toContain('write')
+  })
+
+  it('tells the reviewer to write only the file it was given', () => {
+    const reviewer = BUILTIN_ROLES.find(role => role.id === 'reviewer')
+    expect(reviewer?.persona).toContain('Write ONLY that file')
+  })
+
+  it('tells the reviewer to end with a short summary, not the full findings', () => {
+    const reviewer = BUILTIN_ROLES.find(role => role.id === 'reviewer')
+    expect(reviewer?.persona).toContain('SHORT summary')
+  })
+})
+
 describe('builtin personas', () => {
   it('tell every role to put its conclusion in the final message', () => {
     // 结算通知只带回子代理最后一条消息（ActivationTerminal.output 是 "the epoch's

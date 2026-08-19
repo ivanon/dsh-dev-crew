@@ -118,8 +118,9 @@ before it finished`、`ran out of room before it finished`、`declined the task`
 
 **只有子代理的最后一条消息会被带回**（`ActivationTerminal.output` 的定义是 "the
 epoch's final assistant content"），中间轮次的内容留在它自己的 transcript 里，编排者
-看不到。所以三份内置 persona 都要求把完整结论放进最后一条消息、不要以「完成了」这类
-空话结尾，`tests/config.test.ts` 有回归测试保护这一点。
+看不到。因此内置 persona 都要求那条消息承载该带回的内容、不要以「完成了」这类空话结
+尾——implementer 与 researcher 放完整结论，reviewer 放**摘要**（全文写进它自己落盘的
+评审文件，见下）。`tests/config.test.ts` 有回归测试保护这几条。
 
 第二条通道是 `report` 工具：子代理可在**任何时刻**主动送内容（前缀
 `Background subagent <id> reported:`），不受「只有最后一条」限制。它适合中途报告，
@@ -160,7 +161,7 @@ epoch's final assistant content"），中间轮次的内容留在它自己的 tr
 |---|---|---|
 | `docs/specs` | `YYYY-MM-DD-<topic>_r1.md` | 编排者（`crew-brainstorm`） |
 | `docs/plans` | `YYYY-MM-DD-<topic>_r1.md` | 编排者（`crew-plan`） |
-| `docs/reviews` | `YYYY-MM-DD-<topic>-<spec\|plan\|code>_r<N>.md` | 编排者（`crew-converge`，每环节每轮一份） |
+| `docs/reviews` | `YYYY-MM-DD-<topic>-<spec\|plan\|code>_r<N>-<reviewer 工具名>.md` | **reviewer 自己**（每环节每轮每 reviewer 一份） |
 | `docs/reports` | `YYYY-MM-DD-<topic>-report.md` | 编排者（第 8 步，只一份） |
 
 **每一轮修复另存新版本，不原地改**：第 N 轮评审的对象是 `_rN`，修复后写成
@@ -170,10 +171,22 @@ epoch's final assistant content"），中间轮次的内容留在它自己的 tr
 分派实施时给 implementer 的计划路径必须是**收敛后的最终版本**。纪律 gate 只校验路径
 落在 plans 目录内，不会发现你传的是哪一版。
 
-**评审意见由编排者落盘，不是 reviewer** —— reviewer 的 `toolFilter` 拒了
-`write`/`edit`（它评审产物，不写任何文件），而编排者从结算通知拿到了意见全文。每份
-评审意见文件记录评审对象、参与的 reviewer 及其模型、各自的原始意见、编排者的分类结
-果、**驳回的意见及理由**、本轮是否收敛。最终报告只引用这些文件的路径，不重抄全文。
+**评审意见由 reviewer 自己落盘。** 编排者在 prompt 里给出它该写的文件的完整路径（一个
+reviewer 一份，路径撞车会让后写的覆盖先写的），reviewer 用 `write` 写全文，并把**摘要**
+放在它最后一条消息里：文件路径、几条阻塞项、每条一句话。编排者据摘要判断收敛，需要细
+节时才读文件——这样意见全文既不受「只有最后一条消息会被带回」的限制，也不占编排者上
+下文。
+
+分类之后，编排者在每份文件末尾追加自己的判断：哪些判为阻塞、**驳回的意见及理由**（这
+一节只能由它写，reviewer 不知道自己被驳回了）、本轮是否收敛。
+
+reviewer 因此需要写权限，`toolFilter.deny` 里没有 `write`。**这道纪律没有工具级强制**：
+`write` 的语义是 create or fully replace，能覆盖任何文件，而 `bash` 本来也在范围内。
+「只写给定的那个文件、绝不碰评审对象」完全靠 persona 约定，加上 `crew-converge` 要求编
+排者核对文件确实被创建。`edit` 仍被拒——局部修改已有文件与写一份新报告无关。
+
+reviewer 若始终不落盘，编排者退回用摘要自己转录一份，并在文件里注明是转录——一份没写
+下来的评审等于没评审，但也不值得为落盘失败中止整条流水线。
 
 ## 纪律 gate：调用 implementer 前必须给出 plan 路径
 
@@ -289,7 +302,10 @@ $ curl -s -H 'Host: evil.com' localhost:3099/crew/api/health
   gate 开关，但配不出同一角色的第二个模型、非内置 id 的新角色、以及 `persona` 与
   `toolFilter`。后两者界面从不提交，所以用户层留空、最终值落回组合层配置或按角色
   id 填充的内置模板。
-- `toolFilter` 表达不了「只读 bash」，reviewer 与 researcher 的只读性仍靠 persona。
+- **`toolFilter` 表达不了路径级权限，也表达不了「只读 bash」**。reviewer 需要 `write`
+  才能落盘自己的评审文件，而 `write` 的语义是 create or fully replace——它能覆盖任何
+  文件，包括正在评审的产物；`bash` 也一直在范围内。「只写给定的那个评审文件」完全靠
+  persona 约定与编排者的事后核对，没有任何强制。researcher 不需要落盘，仍拒 `write`。
 - **`toolFilter` 里的工具名是对宿主的外部引用，没有任何机器校验**。宿主的
   `tools.restrict()` 对未知名字**抛错而非忽略**，所以一个拼错或不存在的名字会让
   整个角色在委派时失败。内置模板的名字有回归测试兜底（`tests/config.test.ts`），
