@@ -8,6 +8,7 @@ import { CrewCoordinator } from './coordinator.ts'
 import { registerCrewGate } from './gate.ts'
 import { initDirs } from './init.ts'
 import type { SkippedRoute } from './mount.ts'
+import { registerCrewSkills } from './skills/index.ts'
 import type { Config as ConfigType } from './types.ts'
 
 export const name = 'dsh-dev-crew'
@@ -19,7 +20,7 @@ export const name = 'dsh-dev-crew'
 // 而本插件自己却正常变成 ACTIVE。声明在这里，缺失时停在 PENDING 的是
 // dsh-dev-crew 这一行，用户能在自己直接挂载的地方看到状态。清理未使用的 inject 时
 // 不要删掉它。
-export const inject = ['llm', 'tools', 'subagents', 'systemPrompt']
+export const inject = ['llm', 'tools', 'subagents', 'systemPrompt', 'skills']
 export { Config }
 
 /** 把一条被跳过的路由渲染成可操作的说明。 */
@@ -60,6 +61,8 @@ export function apply(ctx: Context, config: ConfigType): void {
   })
 
   ctx.effect(() => () => { void coordinator.dispose() })
+
+  ctx.effect(() => registerCrewSkills(ctx))
 
   const runInit = () => initDirs(config.artifactDirs, process.cwd())
 

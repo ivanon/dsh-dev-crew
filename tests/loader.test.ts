@@ -83,6 +83,19 @@ class FakeSystemPrompt extends Service {
 }
 
 /**
+ * 最小 skills 替身。
+ *
+ * `registerCrewSkills()` 消费 `ctx.skills.register()`，因此 `apply()` 的
+ * `inject` 数组里加了 `'skills'`。缺了这项替身，`ctx.plugin(crew, ...)` 的
+ * fiber 会停在 `PENDING`，与上面 `FakeSystemPrompt` 注释描述的失败模式相同：
+ * 委派工具从未注册。`register()` 的返回值本身不参与断言，只需是可调用的 disposer。
+ */
+class FakeSkills extends Service {
+  constructor(ctx: Context) { super(ctx, 'skills') }
+  register() { return () => {} }
+}
+
+/**
  * 等待协调器的串行队列排空。
  *
  * 不用固定延迟：那既可能不够（慢机器上偶发失败）又总是浪费时间。协调器的
@@ -100,6 +113,7 @@ describe('plugin under a real cordis context', () => {
     await ctx.plugin(FakeTools)
     await ctx.plugin(FakeSubagents)
     await ctx.plugin(FakeSystemPrompt)
+    await ctx.plugin(FakeSkills)
 
     const fiber = ctx.plugin(crew, {
       roles: [{
@@ -125,6 +139,7 @@ describe('plugin under a real cordis context', () => {
     await ctx.plugin(FakeTools)
     await ctx.plugin(FakeSubagents)
     await ctx.plugin(FakeSystemPrompt)
+    await ctx.plugin(FakeSkills)
 
     const fiber = ctx.plugin(crew, {
       roles: [{
@@ -146,6 +161,7 @@ describe('plugin under a real cordis context', () => {
     await ctx.plugin(FakeTools)
     await ctx.plugin(FakeSubagents)
     await ctx.plugin(FakeSystemPrompt)
+    await ctx.plugin(FakeSkills)
 
     const fiber = ctx.plugin(crew, {})
     await fiber
