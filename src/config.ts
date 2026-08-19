@@ -31,7 +31,7 @@ export const BUILTIN_ROLES: CrewRole[] = [
       + 'owns every fix. Separate blocking problems (errors, self-contradiction, missing content '
       + 'that would make a later step fail) from non-blocking ones (style, wording, polish), and '
       + 'state which is which. Report that you found nothing when you found nothing.',
-    toolFilter: { deny: ['write', 'edit', 'str_replace_editor', 'subagent', 'subagent_fork'] },
+    toolFilter: { deny: ['write', 'edit', 'subagent', 'subagent_fork'] },
   },
   {
     id: 'researcher',
@@ -40,7 +40,7 @@ export const BUILTIN_ROLES: CrewRole[] = [
     persona:
       'You investigate a question and report what you found, with sources. You do not modify the '
       + 'repository. Distinguish what you verified from what you inferred.',
-    toolFilter: { deny: ['write', 'edit', 'str_replace_editor', 'subagent', 'subagent_fork'] },
+    toolFilter: { deny: ['write', 'edit', 'subagent', 'subagent_fork'] },
   },
 ]
 

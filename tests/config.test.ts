@@ -82,3 +82,38 @@ describe('Config schema', () => {
     expect(() => new Config({ pipeline: { maxConvergenceRounds: 0 } })).toThrow()
   })
 })
+
+/**
+ * dsh 宿主的全局工具名，2026-08-19 从 `tools.restrict()` 拒绝未知名字时打印的
+ * `known global tools` 列表逐项抄录（宿主 0.1.0-rc.7）。
+ *
+ * 这份清单会随宿主演进过期，它的作用不是永久真理，而是强制核对：`restrict()`
+ * 对未知工具名**抛错而不是忽略**，所以内置角色的 deny 里出现一个不存在的名字，
+ * 会让该角色在委派时直接失败。0.1.0 就因为 deny 了 `str_replace_editor`
+ * （Anthropic 工具生态的名字，dsh 用 `edit`/`write`）而使 reviewer 与 researcher
+ * 开箱不可用。改动 deny 前，先用真实宿主的这条错误信息核对名字是否存在。
+ */
+const KNOWN_DSH_TOOLS = new Set([
+  'ask_user_question', 'bash', 'edit', 'glob', 'grep', 'list_agents', 'read', 'read_image',
+  'skill', 'subagent', 'subagent_fork', 'todo_write', 'web_search', 'workflow', 'write',
+])
+
+describe('builtin role tool filters', () => {
+  it('only deny tool names the host actually registers', () => {
+    for (const role of BUILTIN_ROLES) {
+      for (const name of role.toolFilter?.deny ?? []) {
+        expect(
+          KNOWN_DSH_TOOLS.has(name),
+          `role "${role.id}" denies "${name}", which is not a known dsh global tool; `
+          + 'restrict() throws on unknown names, so this makes the role unusable',
+        ).toBe(true)
+      }
+    }
+  })
+
+  it('never set an empty allow list, which would strip every tool', () => {
+    for (const role of BUILTIN_ROLES) {
+      expect(role.toolFilter?.allow, `role "${role.id}"`).not.toEqual([])
+    }
+  })
+})
