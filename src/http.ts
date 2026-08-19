@@ -47,6 +47,22 @@ export interface CrewApiDeps {
   readonly writeConfig: (patch: object, expectedRevision: number) => Promise<void>
   readonly mountedToolNames: () => readonly string[]
   readonly skippedRoutes: () => readonly SkippedRoute[]
+  /**
+   * 宿主当前可选的 provider 路由，供界面渲染下拉选项。
+   *
+   * `live` 是已注册的活路由，`configurable` 是声明了但尚未激活的路由——与
+   * `health.ts` 的三态判定同源，区别是那里查单个路由、这里枚举全部。
+   */
+  readonly listProviders: () => { live: readonly string[]; configurable: readonly string[] }
+  /**
+   * 枚举一个 provider 广告的模型 id。
+   *
+   * 只对已注册（live）的路由有意义：宿主的 `listModels` 内部先取该路由的
+   * adapter，未注册的路由会抛错，实现须把它折叠成空数组而不是失败。目录成员是
+   * **建议性**的（宿主声明它不改变路由与请求校验），所以空数组不代表该 provider
+   * 不可用，界面必须始终允许手填。
+   */
+  readonly listModels: (provider: string) => Promise<readonly string[]>
   readonly trustedHosts: readonly string[]
 }
 
@@ -73,9 +89,10 @@ function readBody(req: IncomingMessage): Promise<string | undefined> {
 }
 
 /**
- * 注册配置读写与健康查询的 HTTP 路由。
+ * 注册配置读写、健康查询与 provider/model 枚举的 HTTP 路由。
  *
- * 三条路由都要求 POST（`GET /health` 除外）与可信 Host。健康路由的存在是为了
+ * 全部路由都要求可信 Host。只读查询（`/health`、`/providers`、`/models`）用 GET，
+ * 配置读写（`/settings.get`、`/settings.update`）用 POST。健康路由的存在是为了
  * 补上 headless 下 `logger.warn` 不可见的可观测性缺口：配错 provider 的用户
  * 至少能通过它拿到原因。
  * @param ctx - 注册所在的上下文，需已组合 `webServer`。
@@ -105,6 +122,23 @@ export function registerCrewApi(ctx: Context, deps: CrewApiDeps): () => void {
 
       if (req.method === 'GET' && path.endsWith('/health')) {
         send(200, { ok: true, value: { mounted: deps.mountedToolNames(), skipped: deps.skippedRoutes() } })
+        return
+      }
+
+      if (req.method === 'GET' && path.endsWith('/providers')) {
+        send(200, { ok: true, value: deps.listProviders() })
+        return
+      }
+
+      if (req.method === 'GET' && path.endsWith('/models')) {
+        // `req.url` 是路径加查询串，不含 scheme 与 host；`URL` 需要一个基底才能
+        // 解析，这个基底只用于取 searchParams，从不用于发起请求。
+        const provider = new URL(req.url ?? '', 'http://localhost').searchParams.get('provider')
+        if (provider === null || provider === '') {
+          send(400, { ok: false, error: { code: 'MISSING_PROVIDER', message: 'provider query parameter is required' } })
+          return
+        }
+        send(200, { ok: true, value: { models: await deps.listModels(provider) } })
         return
       }
 

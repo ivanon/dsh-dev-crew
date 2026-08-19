@@ -98,6 +98,8 @@ function testConfig(): Config {
 function buildTestHandler(options: {
   revision: number
   writeError?: unknown
+  providers?: { live: readonly string[]; configurable: readonly string[] }
+  models?: Record<string, readonly string[]>
 }): (req: never, res: never) => Promise<void> {
   let captured: ((req: IncomingMessage, res: ServerResponse) => void | Promise<void>) | undefined
 
@@ -119,6 +121,8 @@ function buildTestHandler(options: {
     },
     mountedToolNames: () => [],
     skippedRoutes: () => [],
+    listProviders: () => options.providers ?? { live: [], configurable: [] },
+    listModels: async provider => options.models?.[provider] ?? [],
     trustedHosts: [],
   })
 
@@ -127,6 +131,44 @@ function buildTestHandler(options: {
 }
 
 describe('crew api routes', () => {
+  it('lists both provider families for the interface dropdown', async () => {
+    const handler = buildTestHandler({
+      revision: 1,
+      providers: { live: ['kimi-coding'], configurable: ['deepseek-official'] },
+    })
+    const result = await invoke(handler, { method: 'GET', url: '/crew/api/providers' })
+    expect(result.status).toBe(200)
+    expect(result.payload.value).toEqual({ live: ['kimi-coding'], configurable: ['deepseek-official'] })
+  })
+
+  it('returns a provider model catalog', async () => {
+    const handler = buildTestHandler({ revision: 1, models: { 'kimi-coding': ['k3', 'k3-256k'] } })
+    const result = await invoke(handler, { method: 'GET', url: '/crew/api/models?provider=kimi-coding' })
+    expect(result.status).toBe(200)
+    expect(result.payload.value).toEqual({ models: ['k3', 'k3-256k'] })
+  })
+
+  it('returns an empty catalog rather than failing for a provider with none', async () => {
+    // 目录是建议性的：拉不到目录不代表 provider 不可用，界面仍允许手填。
+    const handler = buildTestHandler({ revision: 1, models: {} })
+    const result = await invoke(handler, { method: 'GET', url: '/crew/api/models?provider=whatever' })
+    expect(result.status).toBe(200)
+    expect(result.payload.value).toEqual({ models: [] })
+  })
+
+  it('rejects a models query with no provider', async () => {
+    const handler = buildTestHandler({ revision: 1 })
+    const result = await invoke(handler, { method: 'GET', url: '/crew/api/models' })
+    expect(result.status).toBe(400)
+    expect(result.payload.error?.code).toBe('MISSING_PROVIDER')
+  })
+
+  it('decodes a percent-encoded provider name', async () => {
+    const handler = buildTestHandler({ revision: 1, models: { 'my provider': ['m1'] } })
+    const result = await invoke(handler, { method: 'GET', url: '/crew/api/models?provider=my%20provider' })
+    expect(result.payload.value).toEqual({ models: ['m1'] })
+  })
+
   it('rejects settings.update without an expectedRevision', async () => {
     const handler = buildTestHandler({ revision: 7 })
     const result = await invoke(handler, {

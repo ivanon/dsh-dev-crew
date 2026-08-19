@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { displayHealth, withoutTemplateFields } from '../src/client/CrewSection.tsx'
+import { displayHealth, isCustomProvider, providersInUse, withoutTemplateFields } from '../src/client/CrewSection.tsx'
 import type { Config, CrewRole } from '../src/types.ts'
 
 const role = (patch: Partial<CrewRole> = {}): CrewRole => ({
@@ -89,5 +89,62 @@ describe('withoutTemplateFields', () => {
     const source = config()
     withoutTemplateFields(source)
     expect(source.roles[0]).toHaveProperty('persona')
+  })
+})
+
+describe('isCustomProvider', () => {
+  const options = { live: ['kimi-coding'], configurable: ['deepseek-official'] }
+
+  it('treats an empty value as "not selected", not custom', () => {
+    expect(isCustomProvider('', options, false)).toBe(false)
+  })
+
+  it('accepts a live route as a dropdown selection', () => {
+    expect(isCustomProvider('kimi-coding', options, false)).toBe(false)
+  })
+
+  it('accepts a configurable-but-inactive route as a dropdown selection', () => {
+    expect(isCustomProvider('deepseek-official', options, false)).toBe(false)
+  })
+
+  it('falls back to free input for a route the host does not know', () => {
+    // 从 cordis.patch.yml 配进来、或「先填后配」的路由都走这条。
+    expect(isCustomProvider('qwen-not-yet-added', options, false)).toBe(true)
+  })
+
+  it('honours an explicit switch to custom even for a known route', () => {
+    expect(isCustomProvider('kimi-coding', options, true)).toBe(true)
+  })
+})
+
+describe('providersInUse', () => {
+  it('collects distinct non-empty providers across roles and models', () => {
+    const config: Config = {
+      roles: [
+        role({ models: [{ alias: 'a', provider: 'kimi-coding', model: 'k3' }] }),
+        role({
+          id: 'reviewer',
+          models: [
+            { alias: 'a', provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+            { alias: 'b', provider: 'kimi-coding', model: 'k3-256k' },
+          ],
+        }),
+        role({ id: 'researcher', models: [{ alias: 'a', provider: '', model: '' }] }),
+      ],
+      pipeline: { maxConvergenceRounds: 5 },
+      gate: { enabled: true, plansDir: 'docs/plans' },
+      artifactDirs: [],
+    }
+    expect(providersInUse(config)).toEqual(['kimi-coding', 'deepseek-official'])
+  })
+
+  it('returns nothing when no provider is configured', () => {
+    const config: Config = {
+      roles: [role({ models: [{ alias: 'a', provider: '', model: '' }] })],
+      pipeline: { maxConvergenceRounds: 5 },
+      gate: { enabled: true, plansDir: 'docs/plans' },
+      artifactDirs: [],
+    }
+    expect(providersInUse(config)).toEqual([])
   })
 })

@@ -203,6 +203,22 @@ export function apply(ctx: Context, config: ConfigType): void {
       },
       mountedToolNames: () => coordinator.mountedToolNames(),
       skippedRoutes: () => lastSkipped,
+      // 两个枚举接口的路由键字段名不同（`id` vs `provider`），与 health.ts 的
+      // 三态判定同一处上游差异。
+      listProviders: () => ({
+        live: ctx.llm.listProviders().map(entry => entry.id),
+        configurable: ctx.llm.listConfigurableProviders().map(entry => entry.provider),
+      }),
+      listModels: async provider => {
+        try {
+          return (await ctx.llm.listModels(provider)).map(model => model.id)
+        } catch {
+          // 未注册的路由（界面上处于 `unconfigured` 的那些）会让宿主的
+          // `listModels` 抛错。这不是故障：目录本就只对活路由有意义，界面在
+          // 空列表下仍允许手填。
+          return []
+        }
+      },
       trustedHosts: [],
     }))
   })

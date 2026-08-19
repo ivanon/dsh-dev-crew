@@ -22,8 +22,18 @@ dsh plugin --profile <你的 profile> add dsh-dev-crew
 
 ## 配置
 
-在 profile 的 `cordis.patch.yml` 中配置角色。每个角色可绑定一个或多个模型，
-每个模型对应一个独立的委派工具。
+组合了 web app 的部署可以**全程在界面里配置**，不必写 YAML：设置页的 Dev Crew
+区块列出三个内置角色，每个可勾选启用、从下拉菜单选 provider、从模型目录选或手填
+model，另有收敛轮数上限与纪律 gate 开关。provider 下拉的选项来自宿主的活路由与
+已声明未激活路由；选「自定义…」可填一个宿主尚不认识的路由名（先填后配）。model
+用可输入的建议列表而非固定下拉：模型目录是建议性的，不在目录里的 id 仍然合法，
+未激活的 provider 也拉不到目录。
+
+界面配不出来的三样，仍需 YAML：**同一角色的第二个模型**（多模型角色，见下文工具
+命名规则）、**非内置 id 的新角色**、**`persona` 与 `toolFilter`**。
+
+下面是 YAML 形式。在 profile 的 `cordis.patch.yml` 中配置角色，每个角色可绑定一个
+或多个模型，每个模型对应一个独立的委派工具。
 
 ```yaml
 - id: dsh-dev-crew
@@ -133,11 +143,14 @@ dsh plugin --profile <你的 profile> add dsh-dev-crew
 ## HTTP API 与配置界面
 
 宿主组合了 `@deepseek-ai/dsh-host-webserver`（即 `ctx.get('webServer')` 非空，通常
-是 Web host，headless 部署没有这一层）时，插件在 `/crew/api` 前缀下注册三条路由：
+是 Web host，headless 部署没有这一层）时，插件在 `/crew/api` 前缀下注册五条路由。
+只读查询用 GET，配置读写用 POST：
 
 | 路由 | 方法 | 说明 |
 |---|---|---|
 | `/crew/api/health` | GET | 返回 `{ mounted, skipped }`：已挂载的委派工具名与被跳过的路由及原因，补上 headless 下 `logger.warn` 不可见的可观测性缺口 |
+| `/crew/api/providers` | GET | 返回 `{ live, configurable }`：宿主的活路由与已声明未激活路由，供界面渲染 provider 下拉 |
+| `/crew/api/models?provider=<name>` | GET | 返回 `{ models }`：该 provider 广告的模型 id。未注册的路由在宿主侧会抛错，这里折叠成空数组——模型目录是建议性的，空目录不代表 provider 不可用。缺 `provider` 参数答 400 `MISSING_PROVIDER` |
 | `/crew/api/settings.get` | POST | 返回 `{ config, revision }`：脱敏后的当前配置与 revision |
 | `/crew/api/settings.update` | POST | body 为 `{ config, expectedRevision }`，走 `settings.update()` 的 merge-then-validate；revision 冲突返回 409 `REVISION_CONFLICT` |
 
@@ -204,11 +217,20 @@ $ curl -s -H 'Host: evil.com' localhost:3099/crew/api/health
   部署）两者都不存在，路由注册子插件（`ctx.inject(['webServer'], ...)`）永久停在
   `PENDING`，主插件不受影响，但不会有任何报错或提示——判断这两条能力是否可用，
   请以 `GET /crew/api/health` 是否有响应为准。
-- **客户端配置界面未做浏览器级可视化验证**：已验证它依赖的 HTTP API 契约（三条
-  路由的请求/响应、403 拒绝、revision 冲突），但 React 组件在浏览器里的实际渲染
-  （三态健康显示、保存失败时表单是否保留输入等）需要人工打开 `settings.section`
-  确认，自动化验收未覆盖这一层。
+- **客户端配置界面只做过部分浏览器级验证**：五条路由的请求/响应、403 拒绝、
+  revision 冲突都有自动化覆盖，健康态显示与保存落盘已在真实浏览器里确认（那次
+  确认本身发现了保存后健康态不刷新的缺陷，见 issue #1）。仍未在浏览器里走过的：
+  保存失败时表单是否保留输入、KV 缓存失效提示、provider 下拉与 model 建议列表的
+  实际渲染。这一层没有自动化验收。
+- **界面的表达力窄于 YAML**：能启停角色、选 provider、选或填 model、改收敛轮数与
+  gate 开关，但配不出同一角色的第二个模型、非内置 id 的新角色、以及 `persona` 与
+  `toolFilter`。后两者界面从不提交，所以用户层留空、最终值落回组合层配置或按角色
+  id 填充的内置模板。
 - `toolFilter` 表达不了「只读 bash」，reviewer 与 researcher 的只读性仍靠 persona。
+- **`toolFilter` 里的工具名是对宿主的外部引用，没有任何机器校验**。宿主的
+  `tools.restrict()` 对未知名字**抛错而非忽略**，所以一个拼错或不存在的名字会让
+  整个角色在委派时失败。内置模板的名字有回归测试兜底（`tests/config.test.ts`），
+  但用户在 YAML 里自己写的没有——改动前请用真实宿主确认名字存在。
 - 同仓库并发跑两轮流水线未支持。
 
 ## 许可
