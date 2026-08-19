@@ -1,6 +1,6 @@
 {
   "name": "dsh-dev-crew",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A DeepSeek Harness plugin that mounts one subagent delegation tool per configured role and model, each bound to its own model provider route.",
   "type": "module",
   "license": "MIT",
