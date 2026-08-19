@@ -126,50 +126,74 @@ export function apply(ctx: Context, config: ConfigType): void {
     }))
   }
 
-  ctx.effect(() => registerCrewSettings(ctx, config, next => {
-    current = next
-    void coordinator.sync(current.roles)
-  }))
+  // `ctx.inject(['settings'], ...)` 而不是顶层 `ctx.get('settings')`：`settings`
+  // 不在本插件的 `inject` 数组里（它是可选依赖，headless 等部署不组合它，写进
+  // 顶层 `inject` 会让整个插件永久 PENDING），但一次性的 `ctx.get()` 快照读取
+  // 只在 apply() 执行的那一刻判断“有没有”——若 `settings` 服务碰巧还没轮到它的
+  // fiber 完成注册（cordis 对没有共享 `inject` 关系的两个 entry 不提供任何同步
+  // 顺序保证），会把“已组合但还没就绪”误判成“未组合”，此后永远错过，且没有任何
+  // 报错（这不是假设，是在真实组合了 Web host 的 profile 上实测复现过的 bug）。
+  // `ctx.inject(deps, callback)` 是 `ctx.plugin({ inject: deps, apply: callback })`
+  // 的简写：它创建一个子插件，依赖未就绪时停在 PENDING 的是这个子插件而不是
+  // dsh-dev-crew 本体，依赖就绪后自动执行，没有竞态；效果要挂在回调参数的 `sctx`
+  // 上（而非外层 `ctx`），这样 `settings` 服务消失时子 fiber 能正确回收。
+  ctx.inject(['settings'], sctx => {
+    sctx.effect(() => registerCrewSettings(sctx, config, next => {
+      current = next
+      void coordinator.sync(current.roles)
+    }))
+  })
 
-  // 插件自有的命名空间不在 dsh settings RPC 的服务端白名单
-  // （`WEB_SETTINGS_NAMESPACES`，见 packages/host/apiproxy/src/api-proxy.ts）内，
-  // 加入清单是宿主应用的决定，不是注册插件能单方面做到的；因此配置读写必须走
-  // 本插件自建的 HTTP 路由，客户端界面（若交付）也通过它读写，而非
-  // `ctx.settingsScope`。
-  //
-  // 读取本命名空间当前的脱敏描述符（`SettingsDescriptor`，已解析值在 `.value`
-  // 字段）。两条 HTTP 路由都要经它，而不是直接读闭包变量 `current`：
-  // 1）`current` 只在 `registerCrewSettings` 的 `onChange` 回调里赋值，那个回调由
-  //    `scope.watch()` 异步触发，不保证在一次 `settings.update()` 的 await 完成
-  //    前跑完——写后立即读 `current` 可能回显写入前的旧值。
-  // 2）`describe({ redactSecrets: true })` 是 dsh 规定每个 wire surface 都必须
-  //    调用的入口：本插件的 schema 目前没有 `role('secret')` 字段所以无害，但这
-  //    条路径是将来任何人往 schema 里加密钥字段时的唯一防线——直接返回 `current`
-  //    会绕开脱敏，把明文密钥发到浏览器。
-  const describeSelf = () => ctx.get('settings')
-    ?.describe({ redactSecrets: true })
-    .find(descriptor => descriptor.ns === SETTINGS_NAMESPACE)
+  // 同理，`webServer` 也不在顶层 `inject` 里（headless 不组合它），HTTP 路由的
+  // 注册必须走 `ctx.inject(['webServer'], ...)` 而不是顶层 `ctx.get('webServer')`
+  // 快照——理由与上面 `settings` 完全一样，且是同一次真实联调发现的同一类竞态。
+  ctx.inject(['webServer'], hctx => {
+    // 插件自有的命名空间不在 dsh settings RPC 的服务端白名单
+    // （`WEB_SETTINGS_NAMESPACES`，见 packages/host/apiproxy/src/api-proxy.ts）内，
+    // 加入清单是宿主应用的决定，不是注册插件能单方面做到的；因此配置读写必须走
+    // 本插件自建的 HTTP 路由，客户端界面（若交付）也通过它读写，而非
+    // `ctx.settingsScope`。
+    //
+    // 读取本命名空间当前的脱敏描述符（`SettingsDescriptor`，已解析值在 `.value`
+    // 字段）。两条 HTTP 路由都要经它，而不是直接读闭包变量 `current`：
+    // 1）`current` 只在 `registerCrewSettings` 的 `onChange` 回调里赋值，那个回调由
+    //    `scope.watch()` 异步触发，不保证在一次 `settings.update()` 的 await 完成
+    //    前跑完——写后立即读 `current` 可能回显写入前的旧值。
+    // 2）`describe({ redactSecrets: true })` 是 dsh 规定每个 wire surface 都必须
+    //    调用的入口：本插件的 schema 目前没有 `role('secret')` 字段所以无害，但这
+    //    条路径是将来任何人往 schema 里加密钥字段时的唯一防线——直接返回 `current`
+    //    会绕开脱敏，把明文密钥发到浏览器。
+    //
+    // 这里的 `hctx.get('settings')` 是每次 HTTP 请求到达时才求值的懒读取，不是
+    // apply() 时机的一次性快照，所以不受本节顶部注释描述的竞态影响：`settings`
+    // 缺失（或还没就绪）时自然回退到入口配置 `current`，且下一次请求会重新判断，
+    // 不会永久卡死在错误分支——`settings` 是否就绪不影响 `webServer` 这条依赖链，
+    // 因此这里没有把 `settings` 也加进 `ctx.inject` 的依赖列表。
+    const describeSelf = () => hctx.get('settings')
+      ?.describe({ redactSecrets: true })
+      .find(descriptor => descriptor.ns === SETTINGS_NAMESPACE)
 
-  ctx.effect(() => registerCrewApi(ctx, {
-    // 未组合 settings 服务（如某些 headless 部署）时回退到入口配置 `current`。
-    readConfig: () => (describeSelf()?.value as ConfigType | undefined) ?? current,
-    readRevision: () => describeSelf()?.revision ?? 0,
-    writeConfig: async (patch, expectedRevision) => {
-      const settings = ctx.get('settings')
-      if (settings === undefined) throw new Error('no settings provider composed')
-      // `update()`（合并局部 patch）而非 `replace()`（整体替换）：配置界面读到的
-      // 是 §7.1 提到的脱敏描述符，若以此重建整份 section 再 wholesale replace，
-      // 会把 wire 从未返回的每一个密钥字段一并清空——dsh-settings 的 README 专门
-      // 警告过这个场景。`update()` 的 merge-then-validate 会先合并进已持久化的
-      // 用户 section 再校验，调用方未提交的字段保留原值而不是被 schema 默认值
-      // 覆盖；这条校验同时满足「写入前必须用 ConfigSchema 校验」的要求，http.ts
-      // 不需要再独立解析一次。
-      await settings.update(SETTINGS_NAMESPACE, patch, expectedRevision)
-    },
-    mountedToolNames: () => coordinator.mountedToolNames(),
-    skippedRoutes: () => lastSkipped,
-    trustedHosts: [],
-  }))
+    hctx.effect(() => registerCrewApi(hctx, {
+      // 未组合 settings 服务（如某些 headless 部署）时回退到入口配置 `current`。
+      readConfig: () => (describeSelf()?.value as ConfigType | undefined) ?? current,
+      readRevision: () => describeSelf()?.revision ?? 0,
+      writeConfig: async (patch, expectedRevision) => {
+        const settings = hctx.get('settings')
+        if (settings === undefined) throw new Error('no settings provider composed')
+        // `update()`（合并局部 patch）而非 `replace()`（整体替换）：配置界面读到的
+        // 是 §7.1 提到的脱敏描述符，若以此重建整份 section 再 wholesale replace，
+        // 会把 wire 从未返回的每一个密钥字段一并清空——dsh-settings 的 README 专门
+        // 警告过这个场景。`update()` 的 merge-then-validate 会先合并进已持久化的
+        // 用户 section 再校验，调用方未提交的字段保留原值而不是被 schema 默认值
+        // 覆盖；这条校验同时满足「写入前必须用 ConfigSchema 校验」的要求，http.ts
+        // 不需要再独立解析一次。
+        await settings.update(SETTINGS_NAMESPACE, patch, expectedRevision)
+      },
+      mountedToolNames: () => coordinator.mountedToolNames(),
+      skippedRoutes: () => lastSkipped,
+      trustedHosts: [],
+    }))
+  })
 
   void coordinator.sync(current.roles)
   ctx.on('llm/adapters-updated', () => { void coordinator.sync(current.roles) })

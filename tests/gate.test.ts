@@ -69,6 +69,39 @@ describe('resolvePlanPath', () => {
     const prompt = `参考 docs/plans/nonexistent.md 与 ${planFile}`
     expect(resolvePlanPath(prompt, opts())).toBe(planFile)
   })
+
+  // 2026-08-19 真实客户端联调复现：协调者模型用自然中文转述路径时，若路径紧邻
+  // 全角标点（冒号、括号、逗号等），旧的 CANDIDATE 正则会把标点一并吞进候选串，
+  // 导致一个真实存在、合法落在 plansDir 内的路径被误判为不通过围栏检查而拒绝。
+  it('accepts a relative path immediately wrapped in full-width parentheses', () => {
+    expect(resolvePlanPath('按（docs/plans/2026-08-19-feature.md）实现', opts())).toBe(planFile)
+  })
+
+  it('accepts a relative path immediately preceded by a full-width colon', () => {
+    expect(resolvePlanPath('计划文件：docs/plans/2026-08-19-feature.md', opts())).toBe(planFile)
+  })
+
+  it('accepts a relative path immediately followed by a full-width comma', () => {
+    expect(resolvePlanPath('参考 docs/plans/2026-08-19-feature.md，然后动手', opts())).toBe(planFile)
+  })
+
+  it('accepts an absolute path surrounded by full-width colon and full-width period', () => {
+    expect(resolvePlanPath(`计划文件：${planFile}。请照做`, opts())).toBe(planFile)
+  })
+
+  // 反向用例：排除全角标点不能顺带放宽围栏本身——穿越与符号链接逃逸即便紧邻
+  // 全角标点也必须继续被拒绝。
+  it('still rejects traversal escaping the plans directory when wrapped in full-width parentheses', () => {
+    expect(resolvePlanPath('按（docs/plans/../secret.md）实现', opts())).toBeUndefined()
+  })
+
+  it('still rejects a symlink pointing outside the plans directory when wrapped in full-width parentheses', () => {
+    expect(resolvePlanPath('按（docs/plans/escape.md）实现', opts())).toBeUndefined()
+  })
+
+  it('still rejects a path outside the plans directory when immediately preceded by a full-width colon', () => {
+    expect(resolvePlanPath(`计划文件：${outsideFile}`, opts())).toBeUndefined()
+  })
 })
 
 /** 记录 guard 回调的 tools 替身。 */

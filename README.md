@@ -115,6 +115,13 @@ dsh plugin --profile <你的 profile> add dsh-dev-crew
 类型 → realpath 二次围栏检查，防符号链接逃逸）见 `src/gate.ts`。不满足则拒绝，
 拒绝理由会原样回给模型，指导它先把计划文件写出来。
 
+候选路径提取会跳过 ASCII 的反引号/单双引号/圆括号/空白，**也跳过中文全角标点**
+（弯引号 `“”‘’`、CJK 符号与标点如 `：（）。、「」『』【】〔〕《》`、以及其他全角/
+半角字符），所以协调者模型用自然中文转述任务时，即使路径紧邻这些标点书写（例如
+"计划文件：docs/plans/x.md"、"docs/plans/x.md（相对当前工作区根目录）"）也能被
+正确识别；`tests/gate.test.ts` 有对应用例覆盖，包括确认排除全角标点不会连带放宽
+路径穿越/符号链接逃逸的围栏检查。
+
 **关闭方式**：把 `gate.enabled` 设为 `false`。注意这个开关只在插件挂载时读取一次
 （见「已知限制」），中途通过设置页或 `settings.update` 改它不会立即生效，需要重
 新加载插件。`gate.plansDir` 没有这个限制，热更新后立即生效。
@@ -139,45 +146,36 @@ dsh plugin --profile <你的 profile> add dsh-dev-crew
 配套的客户端配置界面（`src/client/CrewSection.tsx`，通过 `dsh.client.inject` 挂进
 `settings.section`）走同一套 HTTP API 读写配置、展示角色列表与健康状态。
 
-**这两条能力都需要 Web host**：在 headless 的 `crewtest` profile 下，
-`--dump-config` 未见任何 `webServer`/`host-webserver` 插件 id，`ctx.get('webServer')`
-为 `undefined`，`registerCrewApi` 按设计返回空 disposer，三条路由与配置界面均不
-存在——这是 headless 部署形态本身的限制，不是 bug。
+**这两条能力都需要 Web host**：在 headless 部署下（例如本仓库用于验收的
+`crewtest` profile），组合树里没有 `webServer` 服务，三条路由与配置界面都不存在
+——这是 headless 部署形态本身的限制，不是 bug。
 
-**但在真实组合了 Web host 的 profile 下这三条路由目前也注册不上，这是一个 bug**
-（另建的 `crewtestweb` profile，bundles 为 `['@deepseek-ai/dsh-base',
-'@deepseek-ai/dsh-web-app', 'dsh-dev-crew']`，`dsh --profile crewtestweb --port
-3099` 实测复现，持续 3 分钟以上稳定复现，非启动瞬时窗口）：
+在组合了 Web host 的部署下，路由注册走的是 `ctx.inject(['webServer'], hctx => {
+hctx.effect(() => registerCrewApi(hctx, {...})) })`（`registerCrewSettings` 对
+`settings` 服务同理）：`ctx.inject` 会新建一个只在 `webServer` 服务就绪后才执行
+的子插件，服务缺失或还没轮到时子插件停在 `PENDING`、主插件不受影响，服务就绪后
+自动执行——不依赖 `webServer`/`settings` 是否已经在 `apply()` 执行的那一刻存在。
+`webServer`/`settings` 都**没有**写进主插件顶层的 `inject` 数组，因为那样会让
+整个插件在 headless（不组合这两个服务）下永久 `PENDING`。
+
+已在新建的 `crewtestweb` profile（`['@deepseek-ai/dsh-base',
+'@deepseek-ai/dsh-web-app', 'dsh-dev-crew']`）上端到端实测通过，包括
+`settings.update` 的写入 + revision 递增 + 回读一致：
 
 ```
-$ curl -s -w '\nHTTP_STATUS:%{http_code}\n' localhost:3099/crew/api/health
-<!doctype html> ...SPA 首页...
-HTTP_STATUS:200
-$ curl -s -w '\nHTTP_STATUS:%{http_code}\n' -H 'Host: evil.com' localhost:3099/crew/api/health
-<!doctype html> ...同一份 SPA 首页，不是期望的 403...
-HTTP_STATUS:200
+$ curl -s localhost:3099/crew/api/health
+{"ok":true,"value":{"mounted":["subagent_implementer"],"skipped":[]}}
+$ curl -s -X POST localhost:3099/crew/api/settings.get
+{"ok":true,"value":{"config":{...},"revision":0}}
+$ curl -s -H 'Host: evil.com' localhost:3099/crew/api/health
+{"ok":false,"error":{"code":"UNTRUSTED_HOST","message":"request rejected by the plugin trust fence"}}
 ```
+（第三条正确返回 403。）连续重启该 profile 三次复测，三条路由每次都正确注册，
+排除了偶发时序窗口的可能。
 
-`/crew/api/*` 请求全部落到了 SPA 的静态兜底路由（对照组 `curl -X POST
-localhost:3099/api/health` 返回 `{"...":"not found"} 404`，证明 `webServer` 本身的
-路由匹配机制是好的），说明 `registerCrewApi` 从未真正把 `/crew/api` 前缀注册进
-`webServer`。
-
-**根因**：`src/index.ts` 里 `apply()` 的 `inject` 只声明了
-`['llm', 'tools', 'subagents', 'systemPrompt', 'skills']`，没有把 `webServer`
-（以及同样受影响的 `settings`）写进去，然后在 `apply()` 里直接 `ctx.get('webServer')`
-判断"有没有"。`docs/cordis-primer.md` 明确写道服务依赖必须通过 `inject` 声明，
-cordis 对没有共享 `inject` 关系的插件**不提供任何同步顺序保证**——`inject`
-是唯一能让一个插件等到另一个插件的服务真正 provide 之后再执行自己 `apply()`
-的机制（vendor/cordis/src/fiber.ts 的 `_reload()` 对零依赖 fiber 也会先
-`await Promise.resolve()` 再执行插件体，不是主线程顺序遍历数组）。`dsh-dev-crew`
-在这次真实组合里，`apply()` 抢先于 `webserver` 行完成了它的 `ctx.get('webServer')`
-判断，读到 `undefined`，`registerCrewApi` 因此返回空 disposer——且这个判断只做
-一次、没有重试或响应式监听，一旦这次输了竞态，该进程生命周期内就永久修不好。
-这是否发生取决于插件加载的实际调度时序，不同环境、不同 profile 组合都可能不同，
-**不能假设"HTTP API 在任何组合了 Web host 的部署上都能用"**。修复需要把
-`webServer`（连同 `settings`）也加进 `apply()` 的 `inject`，让 cordis 保证顺序，
-这是一处代码修复，不在本任务 README-only 的改动范围内，留给后续任务。
+客户端配置界面（`CrewSection.tsx`）的实际浏览器渲染（三态健康显示、保存失败时
+表单不丢内容等）未做人工可视化验证，只验证了它依赖的 HTTP API 契约；见「已知
+限制」。
 
 ## 已知限制
 
@@ -192,34 +190,20 @@ cordis 对没有共享 `inject` 关系的插件**不提供任何同步顺序保�
 - **`gate.enabled` 是启动期开关**：只在插件挂载时决定是否注册纪律 guard，中途
   通过设置页或 HTTP API 改它不会生效，需要重新加载插件才能应用。`gate.plansDir`
   不受此限制。
-- **纪律 gate 的路径候选提取对紧邻的全角标点不健壮**（已在真实客户端联调中复现，
-  见 `src/gate.ts` 的 `CANDIDATE` 正则）：候选字符类只排除 ASCII 的反引号/引号/
-  圆括号与空白，不排除中文全角标点（如 `：`、`（`、`）`）。协调者模型用自然中文
-  转述任务时，若路径前紧跟全角冒号（例如"计划文件：docs/plans/x.md"）或路径后紧
-  跟全角括号（例如"docs/plans/x.md（相对当前工作区根目录）"），这段标点会被贪婪
-  地并入候选串，导致 `resolve()` 出的路径带有多余前后缀而无法通过围栏检查 ——
-  一个真实存在、合法落在 `plansDir` 内的路径会被**误拒**。现有单测（`tests/gate.
-  test.ts`）用 `` `按 ${planFile} 实现` `` 这类路径两侧留有 ASCII 空格的写法，
-  没有覆盖这种紧邻全角标点的场景，因此 100% 覆盖率下未被发现。**当前可行的规避
-  方式是让 prompt 用反引号包住路径**（``` `docs/plans/x.md` ```）——反引号是正则
-  显式识别的包裹符，能正确界定候选边界；正式修复需要扩充候选字符类排除范围或改用
-  显式包裹符优先匹配，留待后续任务处理。
 - **`process.cwd()` 作为 gate 围栏与 `crew_init` 的解析基准**。在 monorepo 子目录
   或远程工作区启动时，cwd 可能不是用户认为的项目根，请在仓库根启动 `dsh`。
 - **大小写不敏感文件系统上的围栏比较**。`startsWith` 前缀比较在 macOS/Windows 上，
   `realpathSync` 返回的大小写可能与配置值不一致。当前未处理。
 - **`trustedHosts` 有字段但无 schema 与界面绑定**，企业内网部署暂时只能走默认的
   loopback 白名单。
-- **HTTP API 与配置界面依赖 Web host**：`ctx.get('webServer')` 未组合时（例如
-  headless 部署）两者都不存在，`registerCrewApi` 返回空 disposer，不会报错也不会
-  留任何提示。
-- **HTTP API 在真实 Web host 组合下可能因加载时序竞态而从未注册成功**（已在
-  `crewtestweb` profile 上实测复现，非理论推测）：`apply()` 的 `inject` 没有把
-  `webServer`（和 `settings`）列进去，`ctx.get('webServer')` 是否读到值取决于
-  `dsh-dev-crew` 与提供 `webServer` 的插件谁先完成加载，cordis 对没有共享 `inject`
-  关系的插件不提供任何顺序保证。一旦这次加载读到 `undefined`，`/crew/api/*` 三条
-  路由与配置界面在该进程的整个生命周期内都不会存在，且没有任何报错或日志提示。
-  修复需要把 `webServer`/`settings` 加进 `inject`，留给后续任务。
+- **HTTP API 与配置界面依赖 Web host**：`webServer` 服务未组合时（例如 headless
+  部署）两者都不存在，路由注册子插件（`ctx.inject(['webServer'], ...)`）永久停在
+  `PENDING`，主插件不受影响，但不会有任何报错或提示——判断这两条能力是否可用，
+  请以 `GET /crew/api/health` 是否有响应为准。
+- **客户端配置界面未做浏览器级可视化验证**：已验证它依赖的 HTTP API 契约（三条
+  路由的请求/响应、403 拒绝、revision 冲突），但 React 组件在浏览器里的实际渲染
+  （三态健康显示、保存失败时表单是否保留输入等）需要人工打开 `settings.section`
+  确认，自动化验收未覆盖这一层。
 - `toolFilter` 表达不了「只读 bash」，reviewer 与 researcher 的只读性仍靠 persona。
 - 同仓库并发跑两轮流水线未支持。
 
