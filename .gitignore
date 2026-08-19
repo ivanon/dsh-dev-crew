@@ -3,3 +3,4 @@ lib/
 *.log
 .DS_Store
 src/skills/content.generated.ts
+.superpowers/
