@@ -37,4 +37,30 @@ describe('Config schema', () => {
     expect(value.roles).toHaveLength(1)
     expect(value.roles[0]!.models[0]!.model).toBe('deepseek-v4-flash')
   })
+
+  it('leaves an omitted toolFilter undefined instead of materializing an empty one', () => {
+    // `allow: []` 的语义是「只保留这零个工具」，即移除全部工具。一个未配置
+    // 工具范围的角色若被物化成空过滤器，其子代理会一个工具都拿不到。
+    const value = new Config({
+      roles: [{
+        id: 'solo',
+        enabled: true,
+        models: [{ alias: 'a', provider: 'p', model: 'm' }],
+      }],
+    })
+    expect(value.roles[0]!.toolFilter).toBeUndefined()
+  })
+
+  it('leaves an omitted allow list undefined inside a supplied toolFilter', () => {
+    const value = new Config({
+      roles: [{
+        id: 'solo',
+        enabled: true,
+        models: [{ alias: 'a', provider: 'p', model: 'm' }],
+        toolFilter: { deny: ['subagent'] },
+      }],
+    })
+    expect(value.roles[0]!.toolFilter!.allow).toBeUndefined()
+    expect(value.roles[0]!.toolFilter!.deny).toEqual(['subagent'])
+  })
 })

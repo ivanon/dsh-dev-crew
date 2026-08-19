@@ -51,38 +51,36 @@ const RoleModelSchema = Schema.object({
   maxTokens: Schema.number(),
 })
 
+// 省略必须保持为 undefined。Schemastery 会把未提供的数组字段物化成 `[]`，
+// 而 `allow: []` 的语义是「只保留这零个工具」——即移除全部工具，与「未配置
+// 工具范围」的意图正好相反。
 const ToolFilterSchema = Schema.object({
-  allow: Schema.array(Schema.string()),
-  deny: Schema.array(Schema.string()),
+  allow: Schema.array(Schema.string()).default(undefined as unknown as string[]),
+  deny: Schema.array(Schema.string()).default(undefined as unknown as string[]),
 })
 
 const CrewRoleSchema = Schema.object({
   id: Schema.string().required(),
   models: Schema.array(RoleModelSchema).default([]),
   persona: Schema.string(),
-  toolFilter: ToolFilterSchema,
+  toolFilter: ToolFilterSchema.default(undefined as unknown as { allow: string[]; deny: string[] }),
   enabled: Schema.boolean().default(false),
 })
 
 /**
- * The exact literal shape `Schema.array(CrewRoleSchema).default()` requires:
- * every declared object-schema field becomes a required key in Schemastery's
- * inferred output type, even for fields our own `CrewRole`/`RoleModel`
- * interfaces mark optional (`persona?`, `toolFilter?`, `maxTokens?`). Casting
- * `BUILTIN_ROLES` to this shape documents that gap instead of hiding it.
+ * `.default()` 的实参类型由 schema 自身推导，而不是我们手写的接口：这样
+ * 转换目标会随 `CrewRoleSchema` 的字段变化自动更新，不会与之独立漂移。
+ * Schemastery 把每个声明字段都变成推导输出类型里的必需键，即使我们自己
+ * 的 `CrewRole`/`RoleModel` 接口把它标为可选（`persona?`、`toolFilter?`、
+ * `maxTokens?`）；对 `BUILTIN_ROLES` 的转换记录的正是这个已知缺口，而不是
+ * 掩盖它。
  */
-type BuiltinRolesDefault = {
-  id: string
-  models: { alias: string; provider: string; model: string; maxTokens: number }[]
-  persona: string
-  toolFilter: { allow: string[]; deny: string[] }
-  enabled: boolean
-}[]
+type CrewRoleArrayOutput = Schemastery.TypeT<typeof CrewRoleSchema>[]
 
 // The two Schema type parameters differ deliberately: input (first) leaves
 // `roles` optional so `new Config({})` type-checks and falls back to
 // BUILTIN_ROLES; output (second) is the plain `ConfigType`, where `roles` is
 // always present after the schema fills in the default.
 export const Config: Schema<Partial<ConfigType>, ConfigType> = Schema.object({
-  roles: Schema.array(CrewRoleSchema).default(BUILTIN_ROLES as unknown as BuiltinRolesDefault),
+  roles: Schema.array(CrewRoleSchema).default(BUILTIN_ROLES as unknown as CrewRoleArrayOutput),
 })
