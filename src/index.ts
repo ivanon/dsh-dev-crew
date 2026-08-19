@@ -110,6 +110,8 @@ export function apply(ctx: Context, config: ConfigType): void {
     },
   })
 
+  let current = config
+
   // `config.gate.enabled` 只在挂载时决定是否注册 guard：中途开关需要重新
   // 注册/注销，那要在这一层（而非 registerCrewSettings 的 onChange 分支）
   // 处理。本任务不实现该分支——`enabled` 变更在下次插件重载后生效。
@@ -123,7 +125,6 @@ export function apply(ctx: Context, config: ConfigType): void {
     }))
   }
 
-  let current = config
   ctx.effect(() => registerCrewSettings(ctx, config, next => {
     current = next
     void coordinator.sync(current.roles)

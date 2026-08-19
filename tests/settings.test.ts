@@ -19,7 +19,7 @@ describe('registerCrewSettings', () => {
   it('pushes the initial resolved value to onChange', () => {
     const onChange = vi.fn()
     const value = { roles: BUILTIN_ROLES }
-    const scope = { get: () => value, watch: () => () => {}, dispose: () => {} }
+    const scope = { get: () => value, watch: () => () => {} }
     registerCrewSettings(fakeCtx(scope), value, onChange)
     expect(onChange).toHaveBeenCalledWith(value)
   })
@@ -30,7 +30,6 @@ describe('registerCrewSettings', () => {
     const scope = {
       get: () => ({ roles: [] }),
       watch: (cb: (next: unknown) => void) => { watcher = cb; return () => {} },
-      dispose: () => {},
     }
     registerCrewSettings(fakeCtx(scope), { roles: [] }, onChange)
     const next = { roles: BUILTIN_ROLES }
@@ -45,7 +44,6 @@ describe('registerCrewSettings', () => {
     const scope = {
       get: () => ({ roles: [] }),
       watch: (cb: (next: unknown) => void) => { watcher = cb; return unwatch },
-      dispose: () => {},
     }
     const dispose = registerCrewSettings(fakeCtx(scope), { roles: [] }, onChange)
     dispose()
