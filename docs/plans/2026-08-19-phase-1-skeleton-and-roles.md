@@ -1151,10 +1151,13 @@ Expected: 输出包含 `# == dsh-dev-crew` 层标记，以及 `- id: dsh-dev-cre
 
 若无输出，说明 `dsh.bundle.patch` 声明未被识别，检查 `package.json` 的 `dsh` 字段与 `cordis.patch.yml` 是否都在 `files` 中。
 
-- [ ] **Step 4: 验证默认配置不挂载任何工具**
+- [ ] **Step 4: 理解 `--dump-config` 能验证什么、不能验证什么**
 
-Run: `dsh --profile crewtest --dump-config | grep -c "tool-subagent"`
-Expected: 输出 `2` —— 只有 base bundle 自带的 `subagent` 与 `subagent_fork` 两行，本插件在默认配置（角色全部停用）下不额外插入任何行。
+`--dump-config` 渲染的是**静态配置树**：profile 的 bundle 层按顺序 patch 出来的行。本插件的角色工具是在 `apply()` 里通过运行时 `ctx.plugin()` 挂载的，**不进入这棵树**，因此 `--dump-config` 对角色的启停完全不敏感——角色开、关、路由失效三种状态下它的输出完全一样。
+
+所以 Step 3 的用途仅限于确认「bundle 层被识别、插件行被插入」。**角色工具是否真的挂载，只能由 Step 6/7 的真实模型问答验证**，没有静态替代品。
+
+不要用 `grep -c "tool-subagent"` 之类的计数作为角色挂载的判据：它数的是 base bundle 自带的静态行，与本插件的运行时挂载无关。
 
 - [ ] **Step 5: 启用一个角色**
 
