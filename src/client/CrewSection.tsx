@@ -212,6 +212,7 @@ export function CrewSection(_props: CrewSectionProps): ReactNode {
           />
           discipline gate enabled
         </label>
+        <p>Changing this requires a plugin reload to take effect; saving alone does not apply it.</p>
         <p>artifact directories: {draft.artifactDirs.join(', ')}</p>
       </section>
       {saveError !== undefined && <p role="alert">{saveError}</p>}
