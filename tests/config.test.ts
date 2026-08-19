@@ -75,7 +75,14 @@ describe('Config schema', () => {
   })
 
   it('supplies artifact directory defaults', () => {
-    expect(new Config({}).artifactDirs).toEqual(['docs/specs', 'docs/plans', 'docs/reports'])
+    expect(new Config({}).artifactDirs)
+      .toEqual(['docs/specs', 'docs/plans', 'docs/reviews', 'docs/reports'])
+  })
+
+  it('includes a reviews directory so review findings have somewhere to land', () => {
+    // 评审意见由编排者落盘——reviewer 的 toolFilter 拒了 write/edit——所以这个
+    // 目录必须和 specs/plans/reports 一样在 crew_init 时就建好。
+    expect(new Config({}).artifactDirs).toContain('docs/reviews')
   })
 
   it('rejects a convergence limit outside the allowed range', () => {
@@ -119,18 +126,23 @@ describe('builtin role tool filters', () => {
 })
 
 describe('builtin personas', () => {
-  it('require every role to report back explicitly', () => {
-    // 子代理结束一轮不会自动回传，宿主自带的提示是 guidance 而非 enforcement
-    // （dsh-tool-subagent-report 的原话），所以 persona 必须自己要求 report。
-    // 少了这一句，编排者会正确地等，但永远等不到东西。
+  it('tell every role to put its conclusion in the final message', () => {
+    // 结算通知只带回子代理最后一条消息（ActivationTerminal.output 是 "the epoch's
+    // final assistant content"），写在前面的内容对编排者不可见。
     for (const role of BUILTIN_ROLES) {
-      expect(role.persona, `role "${role.id}"`).toContain('`report`')
+      expect(role.persona, `role "${role.id}"`).toContain('FINAL message')
     }
   })
 
-  it('tell each role that its own transcript is not visible to the parent', () => {
+  it('tell every role its transcript is invisible to the delegating agent', () => {
     for (const role of BUILTIN_ROLES) {
       expect(role.persona, `role "${role.id}"`).toContain('transcript')
+    }
+  })
+
+  it('offer report as a mid-flight channel rather than the only one', () => {
+    for (const role of BUILTIN_ROLES) {
+      expect(role.persona, `role "${role.id}"`).toContain('`report`')
     }
   })
 })

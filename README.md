@@ -102,18 +102,35 @@ model，另有收敛轮数上限与纪律 gate 开关。provider 下拉的选项
 
 ### 子代理结果如何回到编排者
 
-这一点决定整条流水线能不能跑通，正文里写清了机制：委派工具立刻返回的是**子代理
-id，不是结果**。子代理用 `report` 工具把结论送回，到达时是编排者的一条新消息
-（`Background subagent <id> reported:`），并**开启编排者的新一轮**（`reportDelivery`
-默认 `wakeup`）。
+这一点决定整条流水线能不能跑通。委派工具立刻返回的是**子代理 id，不是结果**。结果
+有两条通道，**主通道是运行时自动送达的结算通知**：
 
-因此编排者派完子代理就该**结束当轮**，不能在同一轮里轮询——报告不可能在那一轮内
-到达。`job_output` / `job_list` / `job_kill` 是 **shell 后台作业**的工具，与子代理无
-关，拿子代理 id 调它们必然失败。
+```
+Background subagent <id> finished and will do no further work unless you send it more.
+Its closing message:
+<子代理最后一条消息的全文>
+```
 
-上游自带的 `tool:report` 提示是 "guidance, not enforcement"（子代理可以完全不
-report，没有任何运行时路径会拒绝它），所以三份内置 persona 各自明确要求结束前调用
-`report`，`tests/config.test.ts` 有回归测试保护这一句。
+开场白按结束方式分几种，**只有 `finished` 表示做完了**（其余是 `was stopped
+before it finished`、`ran out of room before it finished`、`declined the task`、
+`failed before it finished`，以及无输出时的 `It left no closing message.`）。编排者
+从这一行判断成败，不看内容像不像完整的。
+
+**只有子代理的最后一条消息会被带回**（`ActivationTerminal.output` 的定义是 "the
+epoch's final assistant content"），中间轮次的内容留在它自己的 transcript 里，编排者
+看不到。所以三份内置 persona 都要求把完整结论放进最后一条消息、不要以「完成了」这类
+空话结尾，`tests/config.test.ts` 有回归测试保护这一点。
+
+第二条通道是 `report` 工具：子代理可在**任何时刻**主动送内容（前缀
+`Background subagent <id> reported:`），不受「只有最后一条」限制。它适合中途报告，
+或结论较长时确保送达；但**收到 `reported:` 不代表子代理做完了**——做完的判据只有结算
+通知。
+
+两种消息都会**开启编排者的新一轮**（结算通知走 `followup()` 唤醒 idle 的父代理，父
+代理正忙时并入下一个 step 批次；`report` 的 `reportDelivery` 默认 `wakeup`）。因此
+编排者派完子代理就该**结束当轮**，不能在同一轮里轮询——通知不可能在那一轮内到达，只
+会撞上宿主的重复调用告警。`job_output` / `job_list` / `job_kill` 是 **shell 后台作业**
+的工具，与子代理无关，拿子代理 id 调它们必然失败。
 
 `crew-converge` 的 `userInvocable: false` 只影响 Web host 的命令面板（该过滤逻辑
 `isUserInvocable` 仅被 `@deepseek-ai/dsh-host-apiproxy` 消费，用来给客户端命令面
@@ -122,8 +139,8 @@ report，没有任何运行时路径会拒绝它），所以三份内置 persona
 
 ## `crew_init` 与 `/crew-init`
 
-创建流程产物目录（默认 `docs/specs`、`docs/plans`、`docs/reports`，实际以
-`artifactDirs` 配置为准）。两个入口调用同一段逻辑：
+创建流程产物目录（默认 `docs/specs`、`docs/plans`、`docs/reviews`、`docs/reports`，
+实际以 `artifactDirs` 配置为准）。两个入口调用同一段逻辑：
 
 - 工具 `crew_init`：模型可调用，无参数，返回 `{ created, skipped }`。
 - 命令 `/crew-init`：注册在可选的 `commands` 服务下，走
@@ -134,6 +151,29 @@ report，没有任何运行时路径会拒绝它），所以三份内置 persona
 
 **幂等**：已存在的目录原样跳过、不覆盖任何已有文件；目录解析基准是
 `process.cwd()`（见「已知限制」）。
+
+### 产物命名与轮次
+
+规格、计划、评审意见三类产物的文件名都带评审轮次后缀 `_r<N>`：
+
+| 目录 | 文件名 | 产出者 |
+|---|---|---|
+| `docs/specs` | `YYYY-MM-DD-<topic>_r1.md` | 编排者（`crew-brainstorm`） |
+| `docs/plans` | `YYYY-MM-DD-<topic>_r1.md` | 编排者（`crew-plan`） |
+| `docs/reviews` | `YYYY-MM-DD-<topic>-<spec\|plan\|code>_r<N>.md` | 编排者（`crew-converge`，每环节每轮一份） |
+| `docs/reports` | `YYYY-MM-DD-<topic>-report.md` | 编排者（第 8 步，只一份） |
+
+**每一轮修复另存新版本，不原地改**：第 N 轮评审的对象是 `_rN`，修复后写成
+`_r<N+1>`，旧版本原样保留。这样每轮的输入输出都可追溯，复审者能对比两版差异，最终
+报告也能指明结论是第几轮达成的。代码不适用这条——代码的版本由 git 提交承担。
+
+分派实施时给 implementer 的计划路径必须是**收敛后的最终版本**。纪律 gate 只校验路径
+落在 plans 目录内，不会发现你传的是哪一版。
+
+**评审意见由编排者落盘，不是 reviewer** —— reviewer 的 `toolFilter` 拒了
+`write`/`edit`（它评审产物，不写任何文件），而编排者从结算通知拿到了意见全文。每份
+评审意见文件记录评审对象、参与的 reviewer 及其模型、各自的原始意见、编排者的分类结
+果、**驳回的意见及理由**、本轮是否收敛。最终报告只引用这些文件的路径，不重抄全文。
 
 ## 纪律 gate：调用 implementer 前必须给出 plan 路径
 
