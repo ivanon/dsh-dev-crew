@@ -37,8 +37,8 @@
 | `src/client/index.ts` | 三 | 客户端插件入口，注册 `settings.section` |
 | `src/client/CrewSection.tsx` | 三 | 配置界面组件 |
 | `tests/coordinator.test.ts` | 二 | 并发、重名、挂载失败、卸载失败 |
-| `tests/loader.test.ts` | 二 | 真实 Loader 组合测试 |
-| `tests/gate.test.ts` | 二 | 路径解析五步算法与围栏 |
+| `tests/loader.test.ts` | 二 | 真实 cordis 上下文组合测试（**不覆盖 Loader 与 cordis.yml 解析**） |
+| `tests/gate.test.ts` | 二 | 路径解析五步算法与围栏、guard 注册的拦截判断 |
 | `tests/init.test.ts` | 二 | 幂等、不覆盖、路径可配 |
 | `tests/skills.test.ts` | 二 | 四份 skill 注册与 invocation 策略 |
 | `tests/settings.test.ts` | 三 | 配置解析与变更转发 |
@@ -796,10 +796,69 @@ export function registerCrewGate(ctx: Context, deps: GateDeps): () => void {
 
 `inject` 追加 `'tools'` 已有，无需改动。
 
+- [ ] **Step 7b: 补 guard 注册的集成测试**
+
+`resolvePlanPath` 的 11 个用例只覆盖了纯函数。`registerCrewGate` 自身的三条判断 —— 工具名过滤、`prompt` 非字符串、非 implementer 工具放行 —— 目前无覆盖，而它们才是 gate 真正拦截时执行的代码。
+
+在 `tests/gate.test.ts` 追加：
+
+```ts
+import { registerCrewGate } from '../src/gate.ts'
+
+/** 记录 guard 回调的 tools 替身。 */
+function fakeToolsCtx() {
+  let guard: ((execution: { name: string; arguments: unknown }) => string | undefined) | undefined
+  return {
+    call: (name: string, args: unknown) => guard?.({ name, arguments: args }),
+    ctx: { tools: { guard: (fn: typeof guard) => { guard = fn; return () => {} } } } as never,
+  }
+}
+
+describe('registerCrewGate', () => {
+  const deps = (names: string[]) => ({
+    implementerToolNames: () => names,
+    options: () => ({ plansDir, cwd: root }),
+  })
+
+  it('denies an implementer call whose prompt carries no plan path', () => {
+    const { call, ctx } = fakeToolsCtx()
+    registerCrewGate(ctx, deps(['subagent_implementer']))
+    expect(call('subagent_implementer', { prompt: '实现登录功能' })).toContain('plan')
+  })
+
+  it('allows an implementer call with a valid plan path', () => {
+    const { call, ctx } = fakeToolsCtx()
+    registerCrewGate(ctx, deps(['subagent_implementer']))
+    expect(call('subagent_implementer', { prompt: `按 ${planFile} 实现` })).toBeUndefined()
+  })
+
+  it('denies an implementer call whose prompt is not a string', () => {
+    const { call, ctx } = fakeToolsCtx()
+    registerCrewGate(ctx, deps(['subagent_implementer']))
+    expect(call('subagent_implementer', { prompt: 42 })).toContain('plan')
+  })
+
+  it('leaves non-implementer tools alone even without a plan path', () => {
+    // reviewer 不该被这条判据拦截：它评审产物，不实现计划。
+    const { call, ctx } = fakeToolsCtx()
+    registerCrewGate(ctx, deps(['subagent_implementer']))
+    expect(call('subagent_reviewer_ds', { prompt: '评审这份规格' })).toBeUndefined()
+  })
+
+  it('leaves every tool alone when no implementer tool is mounted', () => {
+    const { call, ctx } = fakeToolsCtx()
+    registerCrewGate(ctx, deps([]))
+    expect(call('subagent_implementer', { prompt: '无路径' })).toBeUndefined()
+  })
+})
+```
+
+**同时给 Task 2 的 `FakeTools` 补一个 `guard()` 方法**（返回空 disposer 即可），否则 Task 3 接入 guard 后，`tests/loader.test.ts` 里的真实 `apply()` 会因替身缺方法而抛错。
+
 - [ ] **Step 8: 全量检查并提交**
 
 Run: `npm run check`
-Expected: 65 个测试通过（54 + gate 11），typecheck 与构建通过。
+Expected: 70 个测试通过（54 + gate 11 + guard 集成 5），typecheck 与构建通过。
 
 ```bash
 git add src/gate.ts src/types.ts src/config.ts src/index.ts tests/gate.test.ts
@@ -1019,7 +1078,7 @@ import { initDirs } from './init.ts'
 - [ ] **Step 7: 全量检查并提交**
 
 Run: `npm run check`
-Expected: 71 个测试通过（65 + init 6）。
+Expected: 76 个测试通过（70 + init 6）。
 
 ```bash
 git add src/init.ts src/types.ts src/config.ts src/index.ts tests/init.test.ts
@@ -1255,13 +1314,6 @@ interface CrewSkillMeta {
  */
 const CREW_SKILLS: readonly CrewSkillMeta[] = [
   {
-    name: 'crew',
-    description: '端到端开发流水线：需求讨论、写计划、分派实现、多轮评审收敛、汇总报告。',
-    whenToUse: '用户要求走完整开发流程，或明确提到 crew / 开发流水线时。',
-    modelInvocable: true,
-    userInvocable: true,
-  },
-  {
     name: 'crew-brainstorm',
     description: '把一个开发需求讨论成可实施的规格文档。',
     whenToUse: '需求模糊、需要先讨论清楚再动手时。',
@@ -1275,13 +1327,7 @@ const CREW_SKILLS: readonly CrewSkillMeta[] = [
     modelInvocable: true,
     userInvocable: true,
   },
-  {
-    name: 'crew-converge',
-    description: '评审收敛协议：并行评审、分类阻塞项、修复复审、到上限转遗留。',
-    whenToUse: '流水线内部机制，由 crew 调用。',
-    modelInvocable: true,
-    userInvocable: false,
-  },
+  // `crew` 与 `crew-converge` 在 Task 6 随其正文一并加入。
 ]
 
 /**
@@ -1336,23 +1382,17 @@ function fakeCtx() {
 }
 
 describe('registerCrewSkills', () => {
-  it('registers exactly the four crew skills', () => {
+  it('registers the crew skills declared so far', () => {
     const { ctx, registered } = fakeCtx()
     registerCrewSkills(ctx)
-    expect(registered.map(s => s.name)).toEqual(['crew', 'crew-brainstorm', 'crew-plan', 'crew-converge'])
+    // Task 6 把这里扩到四项：['crew', 'crew-brainstorm', 'crew-plan', 'crew-converge']
+    expect(registered.map(s => s.name)).toEqual(['crew-brainstorm', 'crew-plan'])
   })
 
-  it('keeps crew-converge invisible to human command surfaces', () => {
+  it('exposes authoring skills on both surfaces', () => {
     const { ctx, registered } = fakeCtx()
     registerCrewSkills(ctx)
-    const converge = registered.find(s => s.name === 'crew-converge')
-    expect(converge?.invocation).toEqual({ modelInvocable: true, userInvocable: false })
-  })
-
-  it('exposes the other three on both surfaces', () => {
-    const { ctx, registered } = fakeCtx()
-    registerCrewSkills(ctx)
-    for (const name of ['crew', 'crew-brainstorm', 'crew-plan']) {
+    for (const name of ['crew-brainstorm', 'crew-plan']) {
       expect(registered.find(s => s.name === name)?.invocation)
         .toEqual({ modelInvocable: true, userInvocable: true })
     }
@@ -1368,17 +1408,20 @@ describe('registerCrewSkills', () => {
     const { ctx, disposers } = fakeCtx()
     const dispose = registerCrewSkills(ctx)
     dispose()
-    expect(disposers).toHaveBeenCalledTimes(4)
+    // Task 6 把这里改成 4
+    expect(disposers).toHaveBeenCalledTimes(2)
   })
 
-  it('has generated content for all four skills', () => {
-    expect(Object.keys(SKILL_CONTENTS).sort())
-      .toEqual(['crew', 'crew-brainstorm', 'crew-converge', 'crew-plan'])
+  it('has generated content for every declared skill', () => {
+    // Task 6 把这里扩到四项
+    expect(Object.keys(SKILL_CONTENTS).sort()).toEqual(['crew-brainstorm', 'crew-plan'])
   })
 })
 ```
 
-注意：本任务只创建 `crew-brainstorm.md` 与 `crew-plan.md`，最后两个测试在 Task 6 补齐另外两份正文后才会通过。**本任务先写出全部六个测试，其中两个预期失败**，Task 6 完成后一并转绿 —— 这样 Task 6 的完成判据是客观的，而不是"看起来写完了"。在本任务的报告中如实记录这两个预期失败。
+**本任务的 `CREW_SKILLS` 只列 `crew-brainstorm` 与 `crew-plan` 两项**，测试相应只断言这两项。Task 6 追加另外两份正文时，同时把 `CREW_SKILLS` 与测试的期望值扩到四项。
+
+这样安排是为了**每个 commit 都能 `npm run check` 全绿**。让 Task 5 提交一个已知失败的测试，会与「既有测试必须持续通过」冲突，也会阻断 CI —— 而「Task 6 的完成判据要客观」这个目的，用 Task 6 自己的测试扩展同样能达到：那两条断言从 2 项变成 4 项，改不对就是红的。
 
 - [ ] **Step 7: 在 src/index.ts 注册 skill**
 
@@ -1402,8 +1445,8 @@ import { registerCrewSkills } from './skills/index.ts'
 
 - [ ] **Step 8: 运行测试**
 
-Run: `npm run test -- tests/skills.test.ts`
-Expected: 4 个通过、2 个失败（缺 `crew` 与 `crew-converge` 的正文）。这是预期状态。
+Run: `npm run check`
+Expected: 全绿，81 个测试通过（76 + skills 5）。本任务不留红测试。
 
 - [ ] **Step 9: 提交**
 
@@ -1415,8 +1458,8 @@ git commit -m "feat: skill 注册基础设施与前两份方法论正文
 vitest 不用 esbuild 的 text loader，生成一步让两边共用同一份内容且
 无需任何 loader 配置。crew-converge 仅对模型可见，其余三份两面开放。
 
-crew 与 crew-converge 的正文在下一个任务补齐，对应的两个测试当前
-预期失败。"
+crew 与 crew-converge 的正文在下一个任务补齐，届时 CREW_SKILLS 与
+测试期望值一并扩到四项。本次提交全绿。"
 ```
 
 ---
@@ -1531,7 +1574,7 @@ description: 端到端开发流水线：需求讨论、写计划、分派实现�
 
 1. **角色路由健康** —— implementer 与全部已启用的 reviewer 实例，其工具是否真的在你的工具清单里。不在，说明 provider 没配好。少一个 reviewer 就是降低了收敛标准，不能凑合。
 2. **git 工作区干净** —— `git status --porcelain` 输出为空。未跟踪文件和已暂存改动都算脏：第 7 步以 `<BASE>..HEAD` 为评审范围，任何预先存在的改动都会混进来，让"这次做了什么"不可辨认。
-3. **产物目录可写** —— specs / plans / reports 三个目录存在。不存在就调 `crew_init` 创建。
+3. **产物目录可写** —— 调用 `crew_init`。它按用户配置创建目录并**返回实际路径**，同时告诉你哪些已存在。不要假设目录一定叫 `docs/specs` 之类：路径是可配置的，以 `crew_init` 的返回值为准，后续所有落盘都用它报告的路径。
 
 中止时说清楚：缺什么、怎么修、修好后从第几步继续。
 
@@ -1596,17 +1639,64 @@ description: 端到端开发流水线：需求讨论、写计划、分派实现�
 报告写完后，用一段话向用户汇报要点，不要让他自己去文件里找。
 ```
 
-- [ ] **Step 3: 重新生成并跑全部 skill 测试**
+- [ ] **Step 3: 把 `crew` 与 `crew-converge` 加入注册表**
+
+在 `src/skills/index.ts` 的 `CREW_SKILLS` 数组首位加入 `crew`、末位加入 `crew-converge`：
+
+```ts
+  {
+    name: 'crew',
+    description: '端到端开发流水线：需求讨论、写计划、分派实现、多轮评审收敛、汇总报告。',
+    whenToUse: '用户要求走完整开发流程，或明确提到 crew / 开发流水线时。',
+    modelInvocable: true,
+    userInvocable: true,
+  },
+```
+
+```ts
+  {
+    name: 'crew-converge',
+    description: '评审收敛协议：并行评审、分类阻塞项、修复复审、到上限转遗留。',
+    whenToUse: '流水线内部机制，由 crew 调用。',
+    modelInvocable: true,
+    userInvocable: false,
+  },
+```
+
+- [ ] **Step 4: 把测试期望值扩到四项**
+
+`tests/skills.test.ts` 中三处按注释扩展，并补一条 `crew-converge` 的可见性断言：
+
+```ts
+    expect(registered.map(s => s.name)).toEqual(['crew', 'crew-brainstorm', 'crew-plan', 'crew-converge'])
+```
+
+```ts
+    expect(disposers).toHaveBeenCalledTimes(4)
+```
+
+```ts
+    expect(Object.keys(SKILL_CONTENTS).sort()).toEqual(['crew', 'crew-brainstorm', 'crew-converge', 'crew-plan'])
+```
+
+```ts
+  it('keeps crew-converge invisible to human command surfaces', () => {
+    const { ctx, registered } = fakeCtx()
+    registerCrewSkills(ctx)
+    expect(registered.find(s => s.name === 'crew-converge')?.invocation)
+      .toEqual({ modelInvocable: true, userInvocable: false })
+  })
+```
 
 Run: `npm run test -- tests/skills.test.ts`
 Expected: 6 个测试全部通过（`pretest` 钩子会先重新生成 `content.generated.ts`）。
 
-- [ ] **Step 4: 全量检查**
+- [ ] **Step 5: 全量检查**
 
 Run: `npm run check`
-Expected: 77 个测试通过（71 + skills 6），typecheck 与构建通过。
+Expected: 82 个测试通过，typecheck 与构建通过。
 
-- [ ] **Step 5: 人工确认正文可用性**
+- [ ] **Step 6: 人工确认正文可用性**
 
 Read 四份 `.md`，逐份核对：
 
@@ -1617,10 +1707,10 @@ Read 四份 `.md`，逐份核对：
 
 **最后一条尤其重要**：正文里引用一个够不着的东西，模型会去尝试、失败，然后自己编一个替代方案。
 
-- [ ] **Step 6: 提交**
+- [ ] **Step 7: 提交**
 
 ```bash
-git add src/skills/
+git add src/skills/ tests/skills.test.ts
 git commit -m "feat: crew 主编排与收敛协议正文
 
 crew 逐处点名工具名而非依赖模型从描述分辨角色——所有角色工具的
@@ -1932,7 +2022,7 @@ gate 的 `options()` 闭包同步改为读 `current.gate`，使配置变更后 p
 - [ ] **Step 7: 全量检查并提交**
 
 Run: `npm run check`
-Expected: 90 个测试通过（77 + config 4 + specKey 5 + settings 4）。
+Expected: 95 个测试通过（82 + config 4 + specKey 5 + settings 4）。
 
 ```bash
 git add src/settings.ts src/mount.ts src/index.ts tests/settings.test.ts tests/mount.test.ts
@@ -2455,7 +2545,7 @@ git commit -m "docs: 阶段二三的使用说明与已知限制"
 
 ## 完成判据
 
-- `npm run check` 全绿，测试总数不少于 102。
+- `npm run check` 全绿，测试总数不少于 107。
 - 四份 skill 在真实宿主中注册成功，`crew-converge` 不出现在人可见的命令面。
 - `crew_init` 与 `/crew-init` 均可创建目录且幂等。
 - 纪律 gate 在无 plan 路径时拒绝、有合法路径时放行、路径穿越时拒绝。
@@ -2463,6 +2553,22 @@ git commit -m "docs: 阶段二三的使用说明与已知限制"
 
 ## 遗留与后续
 
+- **skill 正文读不到运行时配置**。四份正文在构建时内嵌为静态字符串，模型无法得知
+  `pipeline.maxConvergenceRounds` 的当前值，也无法得知产物目录被改成了什么。当前的
+  缓解是正文一律写「配置的上限」「以 `crew_init` 返回的路径为准」而不写死数值与路径。
+  真正的解法是加一个只读工具（如 `crew_status`）返回解析后的配置快照，让模型在流水线
+  开始时读一次。未做的原因是它属于新增能力而非本轮缺陷修复。
+- **`crew_init` 的工具描述硬编码了默认目录名**。`artifactDirs` 可配置，而描述文本是
+  静态的。影响有限（描述只是给模型的提示，实际路径以返回值为准），但两者可能给模型
+  互相矛盾的信号。
+- **CSRF**：Host 头检查挡不住浏览器页面向 `localhost` 发 POST。当前定位是「仅面向本地
+  信任环境」，README 需写明。加 Origin 检查或 CSRF token 是后续增强。
+- **`process.cwd()` 作为 gate 围栏与初始化的基准**。在 monorepo 子目录或远程工作区启动
+  时，cwd 可能不是用户认为的项目根。README 需写明「在仓库根启动」。
+- **大小写不敏感文件系统上的围栏比较**。`startsWith` 前缀比较在 macOS/Windows 上，
+  `realpathSync` 返回的大小写可能与配置值不一致。当前未处理。
+- **`trustedHosts` 有字段但无 schema 与界面绑定**，企业内网部署暂时只能走默认的
+  loopback 白名单。
 - gate 的 `enabled` 热更新（当前需重载插件）
 - `toolFilter` 表达不了「只读 bash」，reviewer 与 researcher 的只读性仍靠 persona
 - 同仓库并发跑两轮流水线未支持
