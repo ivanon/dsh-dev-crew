@@ -87,4 +87,5 @@ export const Config: Schema<Partial<ConfigType>, ConfigType> = Schema.object({
     enabled: Schema.boolean().default(true),
     plansDir: Schema.string().default('docs/plans'),
   }).default({ enabled: true, plansDir: 'docs/plans' }),
+  artifactDirs: Schema.array(Schema.string()).default(['docs/specs', 'docs/plans', 'docs/reports']),
 })

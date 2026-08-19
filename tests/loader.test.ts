@@ -140,7 +140,7 @@ describe('plugin under a real cordis context', () => {
     expect([...tools.registered]).not.toContain('subagent_implementer')
   })
 
-  it('registers nothing under the default config (every builtin role disabled)', async () => {
+  it('registers no role tool under the default config (every builtin role disabled)', async () => {
     const ctx = new Context()
     await ctx.plugin(FakeLlm)
     await ctx.plugin(FakeTools)
@@ -152,6 +152,8 @@ describe('plugin under a real cordis context', () => {
     await drainCoordinator()
 
     const tools = ctx.get('tools') as unknown as FakeTools
-    expect(tools.registered.size).toBe(0)
+    // crew_init 是与角色无关的产物目录初始化工具，不受任何角色启停影响，
+    // 因此始终挂载；这里只断言没有任何角色派生的委派工具挂载。
+    expect([...tools.registered].some(name => name.startsWith('subagent_'))).toBe(false)
   })
 })

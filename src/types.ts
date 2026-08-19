@@ -42,4 +42,6 @@ export interface Config {
     /** plans 目录，相对路径按插件进程的 cwd 解析。 */
     plansDir: string
   }
+  /** 流程产物目录，相对项目根。 */
+  artifactDirs: string[]
 }
