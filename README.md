@@ -99,9 +99,11 @@ dsh plugin --profile <你的 profile> add dsh-dev-crew
 `artifactDirs` 配置为准）。两个入口调用同一段逻辑：
 
 - 工具 `crew_init`：模型可调用，无参数，返回 `{ created, skipped }`。
-- 命令 `/crew-init`：注册在可选的 `commands` 服务下（`ctx.get('commands')`），供
-  人在支持命令面的宿主（Web host）里直接触发；headless 部署即使组合了
-  `@deepseek-ai/dsh-commands` 服务，也没有交互式命令输入面去敲这个命令。
+- 命令 `/crew-init`：注册在可选的 `commands` 服务下，走
+  `ctx.inject(['commands'], cctx => {...})`（而不是一次性的 `ctx.get('commands')`
+  快照，理由见「HTTP API 与配置界面」一节对同一模式的说明），供人在支持命令面的
+  宿主（Web host）里直接触发；headless 部署即使组合了 `@deepseek-ai/dsh-commands`
+  服务，也没有交互式命令输入面去敲这个命令。
 
 **幂等**：已存在的目录原样跳过、不覆盖任何已有文件；目录解析基准是
 `process.cwd()`（见「已知限制」）。

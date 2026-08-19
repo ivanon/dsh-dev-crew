@@ -94,21 +94,41 @@ export function apply(ctx: Context, config: ConfigType): void {
     execute: async () => runInit(),
   })))
 
-  // 'commands' 是可选服务：headless 部署没有命令适配器。ctx.get() 读取全局
-  // 服务存储，不受拓扑限制；ctx.commands 属性代理未在 inject 中声明就读取
-  // 会抛错，所以这里不能用它。
-  ctx.get('commands')?.register({
-    name: 'crew-init',
-    description: 'Create the crew workflow artifact directories in this project.',
-    handler: () => {
-      const result = runInit()
-      return {
-        kind: 'success',
-        text: result.created.length === 0
-          ? `All artifact directories already exist: ${result.skipped.join(', ')}`
-          : `Created: ${result.created.join(', ')}`,
-      }
-    },
+  // 'commands'、下面的 'settings'、'webServer' 都是可选服务：headless 等部署不
+  // 组合它们。三处都要注册一个需要长期有效的效果（命令/设置监听/HTTP 路由），
+  // 不能只用 `ctx.get(name)` 在 apply() 执行的那一刻判断"有没有"就决定要不要
+  // 注册——`ctx.get()` 分不清"服务不存在"和"服务还没加载完"：cordis 对没有共享
+  // `inject` 关系的两个 entry 不提供任何同步顺序保证，服务只是碰巧还没轮到自己
+  // 的 fiber 完成注册时，一次性快照会把它误判成"不存在"，此后永远错过，且没有
+  // 任何报错（这不是假设，是在真实组合了 Web host 的 profile 上实测复现过的
+  // bug）。正确做法是 `ctx.inject(deps, callback)`：它是 `ctx.plugin({ inject:
+  // deps, apply: callback })` 的简写，创建一个子插件——依赖未就绪时停在 PENDING
+  // 的是这个子插件而不是 dsh-dev-crew 本体，依赖就绪后自动执行，服务消失时
+  // （若之后又被卸载）子 fiber 也会正确回收，没有竞态。
+  //
+  // 这与 dsh 包规范里"可选服务用 `ctx.get(name)`"并不矛盾：那条规范针对的是
+  // "读取一次服务实例的当前值"这个动作（比如懒读取、每次调用都重新判断——见下面
+  // `webServer` 块里 `hctx.get('settings')` 的用法）；这里做的是"注册一个必须在
+  // 服务生命周期内保持有效的效果"，对加载时序的要求不同，只看那条规范会误以为
+  // `ctx.get()` 就够用。
+  //
+  // 顶层 `inject` 数组不能直接写 `commands`/`settings`/`webServer`：那样会让
+  // 整个 dsh-dev-crew 插件在不组合这些服务的部署（例如 headless）下永久
+  // PENDING，而不是只有这一小段可选功能不可用。
+  ctx.inject(['commands'], cctx => {
+    cctx.effect(() => cctx.get('commands')?.register({
+      name: 'crew-init',
+      description: 'Create the crew workflow artifact directories in this project.',
+      handler: () => {
+        const result = runInit()
+        return {
+          kind: 'success',
+          text: result.created.length === 0
+            ? `All artifact directories already exist: ${result.skipped.join(', ')}`
+            : `Created: ${result.created.join(', ')}`,
+        }
+      },
+    }))
   })
 
   let current = config
@@ -126,17 +146,10 @@ export function apply(ctx: Context, config: ConfigType): void {
     }))
   }
 
-  // `ctx.inject(['settings'], ...)` 而不是顶层 `ctx.get('settings')`：`settings`
-  // 不在本插件的 `inject` 数组里（它是可选依赖，headless 等部署不组合它，写进
-  // 顶层 `inject` 会让整个插件永久 PENDING），但一次性的 `ctx.get()` 快照读取
-  // 只在 apply() 执行的那一刻判断“有没有”——若 `settings` 服务碰巧还没轮到它的
-  // fiber 完成注册（cordis 对没有共享 `inject` 关系的两个 entry 不提供任何同步
-  // 顺序保证），会把“已组合但还没就绪”误判成“未组合”，此后永远错过，且没有任何
-  // 报错（这不是假设，是在真实组合了 Web host 的 profile 上实测复现过的 bug）。
-  // `ctx.inject(deps, callback)` 是 `ctx.plugin({ inject: deps, apply: callback })`
-  // 的简写：它创建一个子插件，依赖未就绪时停在 PENDING 的是这个子插件而不是
-  // dsh-dev-crew 本体，依赖就绪后自动执行，没有竞态；效果要挂在回调参数的 `sctx`
-  // 上（而非外层 `ctx`），这样 `settings` 服务消失时子 fiber 能正确回收。
+  // 同一模式，见上面 `commands` 块的注释：`settings` 不在顶层 `inject` 里，
+  // 走 `ctx.inject(['settings'], ...)` 而不是一次性的 `ctx.get('settings')`
+  // 快照。效果挂在回调参数的 `sctx` 上（而非外层 `ctx`），这样 `settings`
+  // 服务消失时子 fiber 能正确回收。
   ctx.inject(['settings'], sctx => {
     sctx.effect(() => registerCrewSettings(sctx, config, next => {
       current = next
@@ -144,9 +157,8 @@ export function apply(ctx: Context, config: ConfigType): void {
     }))
   })
 
-  // 同理，`webServer` 也不在顶层 `inject` 里（headless 不组合它），HTTP 路由的
-  // 注册必须走 `ctx.inject(['webServer'], ...)` 而不是顶层 `ctx.get('webServer')`
-  // 快照——理由与上面 `settings` 完全一样，且是同一次真实联调发现的同一类竞态。
+  // 同一模式：`webServer` 也不在顶层 `inject` 里，HTTP 路由的注册走
+  // `ctx.inject(['webServer'], ...)`。
   ctx.inject(['webServer'], hctx => {
     // 插件自有的命名空间不在 dsh settings RPC 的服务端白名单
     // （`WEB_SETTINGS_NAMESPACES`，见 packages/host/apiproxy/src/api-proxy.ts）内，
