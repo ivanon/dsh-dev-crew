@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { planMounts, toolNameFor } from '../src/mount.ts'
+import { diffMounts, planMounts, toolNameFor } from '../src/mount.ts'
 import type { CrewRole } from '../src/types.ts'
 
 const live = [{ id: 'deepseek-official' }, { id: 'kimi-coding' }]
@@ -118,5 +118,40 @@ describe('planMounts', () => {
     })]
     const spec = planMounts(roles, live, configurable).specs[0]!
     expect('maxTokens' in spec.config.agentOptions).toBe(false)
+  })
+})
+
+describe('diffMounts', () => {
+  const specA = {
+    toolName: 'subagent_a',
+    config: {
+      provider: 'spawn' as const,
+      toolName: 'subagent_a',
+      backgroundMode: 'continuable' as const,
+      agentOptions: { provider: 'p', model: 'm' },
+    },
+  }
+  const specB = { ...specA, toolName: 'subagent_b', config: { ...specA.config, toolName: 'subagent_b' } }
+
+  it('adds a spec that is not currently mounted', () => {
+    expect(diffMounts([], [specA])).toEqual({ toAdd: [specA], toRemove: [] })
+  })
+
+  it('removes a mounted spec that is no longer planned', () => {
+    expect(diffMounts([specA], [])).toEqual({ toAdd: [], toRemove: ['subagent_a'] })
+  })
+
+  it('does nothing when the plan is unchanged', () => {
+    expect(diffMounts([specA], [specA])).toEqual({ toAdd: [], toRemove: [] })
+  })
+
+  it('remounts a spec whose config changed under the same tool name', () => {
+    const changed = { ...specA, config: { ...specA.config, agentOptions: { provider: 'p', model: 'other' } } }
+    expect(diffMounts([specA], [changed]))
+      .toEqual({ toAdd: [changed], toRemove: ['subagent_a'] })
+  })
+
+  it('handles simultaneous add and remove', () => {
+    expect(diffMounts([specA], [specB])).toEqual({ toAdd: [specB], toRemove: ['subagent_a'] })
   })
 })
