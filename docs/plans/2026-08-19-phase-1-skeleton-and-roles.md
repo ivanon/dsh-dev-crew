@@ -295,6 +295,32 @@ describe('Config schema', () => {
     expect(value.roles).toHaveLength(1)
     expect(value.roles[0]!.models[0]!.model).toBe('deepseek-v4-flash')
   })
+
+  it('leaves an omitted toolFilter undefined instead of materializing an empty one', () => {
+    // `allow: []` 的语义是「只保留这零个工具」，即移除全部工具。一个未配置
+    // 工具范围的角色若被物化成空过滤器，其子代理会一个工具都拿不到。
+    const value = new Config({
+      roles: [{
+        id: 'solo',
+        enabled: true,
+        models: [{ alias: 'a', provider: 'p', model: 'm' }],
+      }],
+    })
+    expect(value.roles[0]!.toolFilter).toBeUndefined()
+  })
+
+  it('leaves an omitted allow list undefined inside a supplied toolFilter', () => {
+    const value = new Config({
+      roles: [{
+        id: 'solo',
+        enabled: true,
+        models: [{ alias: 'a', provider: 'p', model: 'm' }],
+        toolFilter: { deny: ['subagent'] },
+      }],
+    })
+    expect(value.roles[0]!.toolFilter!.allow).toBeUndefined()
+    expect(value.roles[0]!.toolFilter!.deny).toEqual(['subagent'])
+  })
 })
 ```
 
@@ -402,30 +428,52 @@ const RoleModelSchema = Schema.object({
   maxTokens: Schema.number(),
 })
 
+// 省略必须保持为 undefined。Schemastery 会把未提供的数组字段物化成 `[]`，
+// 而 `allow: []` 的语义是「只保留这零个工具」——即移除全部工具，与「未配置
+// 工具范围」的意图正好相反。dsh 自身在 tool-subagent 的 Config 中用同样手法
+// 规避（原注释：Preserve omission; Schemastery's `{ allow: [] }` default
+// would deny every tool）。
 const ToolFilterSchema = Schema.object({
-  allow: Schema.array(Schema.string()),
-  deny: Schema.array(Schema.string()),
+  allow: Schema.array(Schema.string()).default(undefined as unknown as string[]),
+  deny: Schema.array(Schema.string()).default(undefined as unknown as string[]),
 })
 
 const CrewRoleSchema = Schema.object({
   id: Schema.string().required(),
   models: Schema.array(RoleModelSchema).default([]),
   persona: Schema.string(),
-  toolFilter: ToolFilterSchema,
+  toolFilter: ToolFilterSchema.default(undefined as unknown as ToolFilter),
   enabled: Schema.boolean().default(false),
 })
 
-export const Config: Schema<ConfigType> = Schema.object({
-  roles: Schema.array(CrewRoleSchema).default(BUILTIN_ROLES),
+/**
+ * `.default(BUILTIN_ROLES)` 的转换目标，由 schema 自身推导而来。
+ *
+ * Schemastery 的 `ObjectT` 映射把每个声明字段变成必需键，而 `CrewRole` 的
+ * `persona` / `toolFilter` 与 `RoleModel` 的 `maxTokens` 是可选的；TypeScript
+ * 不允许把可选属性赋给必需属性，因此这一步的转换无法避免。让转换目标由
+ * `CrewRoleSchema` 推导而不是手写一份镜像结构，schema 变更时不会静默失配。
+ */
+type CrewRoleArrayOutput = Schema.TypeT<typeof CrewRoleSchema>[]
+
+/**
+ * 输入端 `roles` 可省略（`new Config({})` 取内置角色），输出端始终是完整的
+ * `ConfigType`，因此使用双类型参数。单参数的 `Schema<ConfigType>` 会让输入
+ * 类型也要求 `roles`，与 `new Config({})` 冲突。
+ */
+export const Config: Schema<Partial<ConfigType>, ConfigType> = Schema.object({
+  roles: Schema.array(CrewRoleSchema).default(BUILTIN_ROLES as unknown as CrewRoleArrayOutput),
 })
 ```
+
+`Schema.TypeT` 的命名空间引用方式以实际编译通过为准；若 schemastery 的类型导出形式不同，改用等价写法，但保持「转换目标由 schema 推导」这一点不变。`import type` 行需要同时引入 `ToolFilter`。
 
 类型标注方式与 dsh 自身插件一致（`packages/subagent/tool-subagent/src/index.ts` 的 `export const Config: z<Config> = z.object({...})`），不使用类型断言：若 schema 与接口不匹配，应当在下一步的 typecheck 中暴露并修正 schema，而不是用断言掩盖。
 
 - [ ] **Step 5: 运行测试确认通过**
 
 Run: `npm run test -- tests/config.test.ts`
-Expected: 5 个测试通过。
+Expected: 7 个测试通过。
 
 - [ ] **Step 6: 类型检查**
 
@@ -848,7 +896,7 @@ Expected: 无错误退出。若 `ctx.llm` 或 `ctx.logger` 报未知属性，确
 - [ ] **Step 7: 全量测试与构建**
 
 Run: `npm run check`
-Expected: typecheck 通过、22 个测试通过（smoke 2 + config 5 + health 5 + mount 10）、构建产出 `lib/index.js`。
+Expected: typecheck 通过、24 个测试通过（smoke 2 + config 7 + health 5 + mount 10）、构建产出 `lib/index.js`。
 
 - [ ] **Step 8: 复查 external 生效**
 
@@ -1059,7 +1107,7 @@ export function apply(ctx: Context, config: ConfigType): void {
 - [ ] **Step 6: 类型检查与全量测试**
 
 Run: `npm run check`
-Expected: typecheck 通过、27 个测试通过（smoke 2 + config 5 + health 5 + mount 15）、构建成功。
+Expected: typecheck 通过、29 个测试通过（smoke 2 + config 7 + health 5 + mount 15）、构建成功。
 
 若 `ctx.on('llm/adapters-updated', ...)` 报事件名未知，确认 `@deepseek-ai/dsh-llm` 在 devDependencies 中 —— 该事件通过声明合并加入事件映射，需要该包的类型在编译范围内。
 
