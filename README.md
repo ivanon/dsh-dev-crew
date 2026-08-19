@@ -139,11 +139,45 @@ dsh plugin --profile <你的 profile> add dsh-dev-crew
 配套的客户端配置界面（`src/client/CrewSection.tsx`，通过 `dsh.client.inject` 挂进
 `settings.section`）走同一套 HTTP API 读写配置、展示角色列表与健康状态。
 
-**这两条能力都需要 Web host**：本次在 headless 的 `crewtest` profile 下验证时，
+**这两条能力都需要 Web host**：在 headless 的 `crewtest` profile 下，
 `--dump-config` 未见任何 `webServer`/`host-webserver` 插件 id，`ctx.get('webServer')`
 为 `undefined`，`registerCrewApi` 按设计返回空 disposer，三条路由与配置界面均不
-存在。若要实测这部分，需要一个组合了 Web host 的 profile；不要为此改动或复用用户
-日常使用的 `web` profile。
+存在——这是 headless 部署形态本身的限制，不是 bug。
+
+**但在真实组合了 Web host 的 profile 下这三条路由目前也注册不上，这是一个 bug**
+（另建的 `crewtestweb` profile，bundles 为 `['@deepseek-ai/dsh-base',
+'@deepseek-ai/dsh-web-app', 'dsh-dev-crew']`，`dsh --profile crewtestweb --port
+3099` 实测复现，持续 3 分钟以上稳定复现，非启动瞬时窗口）：
+
+```
+$ curl -s -w '\nHTTP_STATUS:%{http_code}\n' localhost:3099/crew/api/health
+<!doctype html> ...SPA 首页...
+HTTP_STATUS:200
+$ curl -s -w '\nHTTP_STATUS:%{http_code}\n' -H 'Host: evil.com' localhost:3099/crew/api/health
+<!doctype html> ...同一份 SPA 首页，不是期望的 403...
+HTTP_STATUS:200
+```
+
+`/crew/api/*` 请求全部落到了 SPA 的静态兜底路由（对照组 `curl -X POST
+localhost:3099/api/health` 返回 `{"...":"not found"} 404`，证明 `webServer` 本身的
+路由匹配机制是好的），说明 `registerCrewApi` 从未真正把 `/crew/api` 前缀注册进
+`webServer`。
+
+**根因**：`src/index.ts` 里 `apply()` 的 `inject` 只声明了
+`['llm', 'tools', 'subagents', 'systemPrompt', 'skills']`，没有把 `webServer`
+（以及同样受影响的 `settings`）写进去，然后在 `apply()` 里直接 `ctx.get('webServer')`
+判断"有没有"。`docs/cordis-primer.md` 明确写道服务依赖必须通过 `inject` 声明，
+cordis 对没有共享 `inject` 关系的插件**不提供任何同步顺序保证**——`inject`
+是唯一能让一个插件等到另一个插件的服务真正 provide 之后再执行自己 `apply()`
+的机制（vendor/cordis/src/fiber.ts 的 `_reload()` 对零依赖 fiber 也会先
+`await Promise.resolve()` 再执行插件体，不是主线程顺序遍历数组）。`dsh-dev-crew`
+在这次真实组合里，`apply()` 抢先于 `webserver` 行完成了它的 `ctx.get('webServer')`
+判断，读到 `undefined`，`registerCrewApi` 因此返回空 disposer——且这个判断只做
+一次、没有重试或响应式监听，一旦这次输了竞态，该进程生命周期内就永久修不好。
+这是否发生取决于插件加载的实际调度时序，不同环境、不同 profile 组合都可能不同，
+**不能假设"HTTP API 在任何组合了 Web host 的部署上都能用"**。修复需要把
+`webServer`（连同 `settings`）也加进 `apply()` 的 `inject`，让 cordis 保证顺序，
+这是一处代码修复，不在本任务 README-only 的改动范围内，留给后续任务。
 
 ## 已知限制
 
@@ -179,6 +213,13 @@ dsh plugin --profile <你的 profile> add dsh-dev-crew
 - **HTTP API 与配置界面依赖 Web host**：`ctx.get('webServer')` 未组合时（例如
   headless 部署）两者都不存在，`registerCrewApi` 返回空 disposer，不会报错也不会
   留任何提示。
+- **HTTP API 在真实 Web host 组合下可能因加载时序竞态而从未注册成功**（已在
+  `crewtestweb` profile 上实测复现，非理论推测）：`apply()` 的 `inject` 没有把
+  `webServer`（和 `settings`）列进去，`ctx.get('webServer')` 是否读到值取决于
+  `dsh-dev-crew` 与提供 `webServer` 的插件谁先完成加载，cordis 对没有共享 `inject`
+  关系的插件不提供任何顺序保证。一旦这次加载读到 `undefined`，`/crew/api/*` 三条
+  路由与配置界面在该进程的整个生命周期内都不会存在，且没有任何报错或日志提示。
+  修复需要把 `webServer`/`settings` 加进 `inject`，留给后续任务。
 - `toolFilter` 表达不了「只读 bash」，reviewer 与 researcher 的只读性仍靠 persona。
 - 同仓库并发跑两轮流水线未支持。
 
