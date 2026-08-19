@@ -8,6 +8,7 @@ import { CrewCoordinator } from './coordinator.ts'
 import { registerCrewGate } from './gate.ts'
 import { initDirs } from './init.ts'
 import type { SkippedRoute } from './mount.ts'
+import { registerCrewSettings } from './settings.ts'
 import { registerCrewSkills } from './skills/index.ts'
 import type { Config as ConfigType } from './types.ts'
 
@@ -109,16 +110,25 @@ export function apply(ctx: Context, config: ConfigType): void {
     },
   })
 
+  // `config.gate.enabled` 只在挂载时决定是否注册 guard：中途开关需要重新
+  // 注册/注销，那要在这一层（而非 registerCrewSettings 的 onChange 分支）
+  // 处理。本任务不实现该分支——`enabled` 变更在下次插件重载后生效。
   if (config.gate.enabled) {
     ctx.effect(() => registerCrewGate(ctx, {
       // 精确匹配工具命名规则，不能用 startsWith('subagent_implementer')：
       // 那会把自定义角色 `implementer-v2` 的工具也当成 implementer。
       implementerToolNames: () => coordinator.mountedToolNames()
         .filter(name => name === 'subagent_implementer' || name.startsWith('subagent_implementer_')),
-      options: () => ({ plansDir: config.gate.plansDir, cwd: process.cwd() }),
+      options: () => ({ plansDir: current.gate.plansDir, cwd: process.cwd() }),
     }))
   }
 
-  void coordinator.sync(config.roles)
-  ctx.on('llm/adapters-updated', () => { void coordinator.sync(config.roles) })
+  let current = config
+  ctx.effect(() => registerCrewSettings(ctx, config, next => {
+    current = next
+    void coordinator.sync(current.roles)
+  }))
+
+  void coordinator.sync(current.roles)
+  ctx.on('llm/adapters-updated', () => { void coordinator.sync(current.roles) })
 }

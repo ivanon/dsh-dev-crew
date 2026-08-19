@@ -168,6 +168,36 @@ export function planMounts(
   return { specs, skipped }
 }
 
+/**
+ * 一个挂载实例的语义比较键。
+ *
+ * 不用 `JSON.stringify(config)`：那依赖键序稳定，而配置热更新会让 schemastery
+ * 产出一棵全新的对象树，键序不再由 `planMounts` 的字面量顺序决定。语义相同
+ * 却键序不同会被判为「已变化」，导致工具无谓地卸载重挂——重挂使所有会话的
+ * 模型缓存前缀失效。
+ *
+ * deny/allow 列表排序后参与比较：集合语义，顺序不构成语义差异。
+ * @param spec - 待求键的挂载实例。
+ * @returns 语义相同则相等的字符串键。
+ */
+export function specKey(spec: MountSpec): string {
+  const c = spec.config
+  const filter = c.toolFilter
+  return JSON.stringify([
+    spec.toolName,
+    c.provider,
+    c.backgroundMode,
+    c.agentOptions.provider,
+    c.agentOptions.model,
+    c.agentOptions.maxTokens ?? null,
+    'persona' in c ? c.persona : null,
+    filter === undefined ? null : [
+      filter.allow === undefined ? null : [...filter.allow].sort(),
+      filter.deny === undefined ? null : [...filter.deny].sort(),
+    ],
+  ])
+}
+
 /** 两次挂载计划之间的差异。 */
 export interface MountDiff {
   /** 需要新挂载的实例。 */
@@ -198,7 +228,7 @@ export function diffMounts(
   for (const spec of current) {
     const replacement = nextByName.get(spec.toolName)
     if (replacement === undefined) toRemove.push(spec.toolName)
-    else if (JSON.stringify(replacement.config) !== JSON.stringify(spec.config)) {
+    else if (specKey(replacement) !== specKey(spec)) {
       toRemove.push(spec.toolName)
     }
   }
@@ -206,7 +236,7 @@ export function diffMounts(
   for (const spec of next) {
     const existing = currentByName.get(spec.toolName)
     if (existing === undefined) toAdd.push(spec)
-    else if (JSON.stringify(existing.config) !== JSON.stringify(spec.config)) {
+    else if (specKey(existing) !== specKey(spec)) {
       toAdd.push(spec)
     }
   }

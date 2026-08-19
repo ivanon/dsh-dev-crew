@@ -44,4 +44,9 @@ export interface Config {
   }
   /** 流程产物目录，相对项目根。 */
   artifactDirs: string[]
+  /** 流水线参数。 */
+  pipeline: {
+    /** 每个评审环节的收敛轮数上限。达到上限仍有阻塞项则转遗留清单。 */
+    maxConvergenceRounds: number
+  }
 }

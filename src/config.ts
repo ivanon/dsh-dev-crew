@@ -88,4 +88,7 @@ export const Config: Schema<Partial<ConfigType>, ConfigType> = Schema.object({
     plansDir: Schema.string().default('docs/plans'),
   }).default({ enabled: true, plansDir: 'docs/plans' }),
   artifactDirs: Schema.array(Schema.string()).default(['docs/specs', 'docs/plans', 'docs/reports']),
+  pipeline: Schema.object({
+    maxConvergenceRounds: Schema.number().min(1).max(10).default(3),
+  }).default({ maxConvergenceRounds: 3 }),
 })

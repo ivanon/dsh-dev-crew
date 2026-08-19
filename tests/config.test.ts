@@ -63,4 +63,22 @@ describe('Config schema', () => {
     expect(value.roles[0]!.toolFilter!.allow).toBeUndefined()
     expect(value.roles[0]!.toolFilter!.deny).toEqual(['subagent'])
   })
+
+  it('supplies pipeline defaults', () => {
+    expect(new Config({}).pipeline.maxConvergenceRounds).toBe(3)
+  })
+
+  it('supplies gate defaults', () => {
+    const gate = new Config({}).gate
+    expect(gate.enabled).toBe(true)
+    expect(gate.plansDir).toBe('docs/plans')
+  })
+
+  it('supplies artifact directory defaults', () => {
+    expect(new Config({}).artifactDirs).toEqual(['docs/specs', 'docs/plans', 'docs/reports'])
+  })
+
+  it('rejects a convergence limit outside the allowed range', () => {
+    expect(() => new Config({ pipeline: { maxConvergenceRounds: 0 } })).toThrow()
+  })
 })

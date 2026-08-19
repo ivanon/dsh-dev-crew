@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { BUILTIN_ROLES } from '../src/config.ts'
-import { diffMounts, planMounts, toolNameFor } from '../src/mount.ts'
+import { diffMounts, planMounts, specKey, toolNameFor } from '../src/mount.ts'
 import type { CrewRole } from '../src/types.ts'
 
 const live = [{ id: 'deepseek-official' }, { id: 'kimi-coding' }]
@@ -280,5 +280,57 @@ describe('diffMounts', () => {
 
   it('handles simultaneous add and remove', () => {
     expect(diffMounts([specA], [specB])).toEqual({ toAdd: [specB], toRemove: ['subagent_a'] })
+  })
+})
+
+describe('specKey', () => {
+  const base = {
+    toolName: 'subagent_a',
+    config: {
+      provider: 'spawn' as const,
+      toolName: 'subagent_a',
+      backgroundMode: 'continuable' as const,
+      agentOptions: { provider: 'p', model: 'm' },
+      persona: 'you implement',
+      toolFilter: { deny: ['subagent'] },
+    },
+  }
+
+  it('is stable across differently ordered but semantically identical configs', () => {
+    const reordered = {
+      toolName: 'subagent_a',
+      config: {
+        toolFilter: { deny: ['subagent'] },
+        persona: 'you implement',
+        agentOptions: { model: 'm', provider: 'p' },
+        backgroundMode: 'continuable' as const,
+        toolName: 'subagent_a',
+        provider: 'spawn' as const,
+      },
+    }
+    expect(specKey(reordered)).toBe(specKey(base))
+  })
+
+  it('changes when the model changes', () => {
+    const changed = { ...base, config: { ...base.config, agentOptions: { provider: 'p', model: 'other' } } }
+    expect(specKey(changed)).not.toBe(specKey(base))
+  })
+
+  it('changes when the deny list content changes', () => {
+    const changed = { ...base, config: { ...base.config, toolFilter: { deny: ['other'] } } }
+    expect(specKey(changed)).not.toBe(specKey(base))
+  })
+
+  it('is stable across deny lists that differ only in order', () => {
+    const a = { ...base, config: { ...base.config, toolFilter: { deny: ['x', 'y'] } } }
+    const b = { ...base, config: { ...base.config, toolFilter: { deny: ['y', 'x'] } } }
+    expect(specKey(a)).toBe(specKey(b))
+  })
+
+  it('distinguishes an absent persona from an empty one', () => {
+    const withoutPersona = { toolName: 'subagent_a', config: { ...base.config } }
+    delete (withoutPersona.config as { persona?: string }).persona
+    const emptyPersona = { ...base, config: { ...base.config, persona: '' } }
+    expect(specKey(withoutPersona)).not.toBe(specKey(emptyPersona))
   })
 })
