@@ -117,3 +117,20 @@ describe('builtin role tool filters', () => {
     }
   })
 })
+
+describe('builtin personas', () => {
+  it('require every role to report back explicitly', () => {
+    // 子代理结束一轮不会自动回传，宿主自带的提示是 guidance 而非 enforcement
+    // （dsh-tool-subagent-report 的原话），所以 persona 必须自己要求 report。
+    // 少了这一句，编排者会正确地等，但永远等不到东西。
+    for (const role of BUILTIN_ROLES) {
+      expect(role.persona, `role "${role.id}"`).toContain('`report`')
+    }
+  })
+
+  it('tell each role that its own transcript is not visible to the parent', () => {
+    for (const role of BUILTIN_ROLES) {
+      expect(role.persona, `role "${role.id}"`).toContain('transcript')
+    }
+  })
+})

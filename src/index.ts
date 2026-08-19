@@ -142,7 +142,8 @@ export function apply(ctx: Context, config: ConfigType): void {
       // 那会把自定义角色 `implementer-v2` 的工具也当成 implementer。
       implementerToolNames: () => coordinator.mountedToolNames()
         .filter(name => name === 'subagent_implementer' || name.startsWith('subagent_implementer_')),
-      options: () => ({ plansDir: current.gate.plansDir, cwd: process.cwd() }),
+      plansDir: () => current.gate.plansDir,
+      fallbackCwd: () => process.cwd(),
     }))
   }
 

@@ -100,6 +100,21 @@ model，另有收敛轮数上限与纪律 gate 开关。provider 下拉的选项
 | `crew-plan` | 把一份规格文档拆成可逐任务执行的实施计划 | 单独使用：已有规格、要拆成可分派的任务；也是 `crew` 流水线第 4 步内部调用的对象 |
 | `crew-converge` | 评审收敛协议：并行起多个 reviewer、分类阻塞/非阻塞项、修复复审、到轮次上限转遗留清单 | **只对模型可见**（`invocation: { modelInvocable: true, userInvocable: false }`），人不能单独触发 —— 它是 `crew` 内部在三处评审环节（规格/计划/代码）调用的机制，独立唤起没有意义 |
 
+### 子代理结果如何回到编排者
+
+这一点决定整条流水线能不能跑通，正文里写清了机制：委派工具立刻返回的是**子代理
+id，不是结果**。子代理用 `report` 工具把结论送回，到达时是编排者的一条新消息
+（`Background subagent <id> reported:`），并**开启编排者的新一轮**（`reportDelivery`
+默认 `wakeup`）。
+
+因此编排者派完子代理就该**结束当轮**，不能在同一轮里轮询——报告不可能在那一轮内
+到达。`job_output` / `job_list` / `job_kill` 是 **shell 后台作业**的工具，与子代理无
+关，拿子代理 id 调它们必然失败。
+
+上游自带的 `tool:report` 提示是 "guidance, not enforcement"（子代理可以完全不
+report，没有任何运行时路径会拒绝它），所以三份内置 persona 各自明确要求结束前调用
+`report`，`tests/config.test.ts` 有回归测试保护这一句。
+
 `crew-converge` 的 `userInvocable: false` 只影响 Web host 的命令面板（该过滤逻辑
 `isUserInvocable` 仅被 `@deepseek-ai/dsh-host-apiproxy` 消费，用来给客户端命令面
 板供数据）；headless 部署没有交互式命令面，这条隔离在源码/组装层面即可确认，无需
@@ -128,6 +143,12 @@ model，另有收敛轮数上限与纪律 gate 开关。provider 下拉的选项
 之内**的路径，五步判据（候选提取 → resolve 规范化 → 围栏前缀检查 → 存在性/文件
 类型 → realpath 二次围栏检查，防符号链接逃逸）见 `src/gate.ts`。不满足则拒绝，
 拒绝理由会原样回给模型，指导它先把计划文件写出来。
+
+**围栏基准是发起调用的会话自己的工作目录**（`execution.agent.session.header.cwd`，
+宿主在会话创建时校验为绝对路径），不是 dsh 进程的启动目录 —— 所以 `dsh web` 一个
+长驻进程可以服务多个项目，无需为每个项目重开。会话未携带 cwd 时才回退到
+`process.cwd()`。拒绝理由里会写出解析出的围栏绝对路径与它的基准来源，配置错位
+因此可诊断，而不是让模型反复重试一个正确的路径。
 
 候选路径提取会跳过 ASCII 的反引号/单双引号/圆括号/空白，**也跳过中文全角标点**
 （弯引号 `“”‘’`、CJK 符号与标点如 `：（）。、「」『』【】〔〕《》`、以及其他全角/
@@ -207,8 +228,10 @@ $ curl -s -H 'Host: evil.com' localhost:3099/crew/api/health
 - **`gate.enabled` 是启动期开关**：只在插件挂载时决定是否注册纪律 guard，中途
   通过设置页或 HTTP API 改它不会生效，需要重新加载插件才能应用。`gate.plansDir`
   不受此限制。
-- **`process.cwd()` 作为 gate 围栏与 `crew_init` 的解析基准**。在 monorepo 子目录
-  或远程工作区启动时，cwd 可能不是用户认为的项目根，请在仓库根启动 `dsh`。
+- **`crew_init` 的解析基准仍是 `process.cwd()`**。gate 围栏已改为会话自己的工作
+  目录（`SessionHeader.cwd`），但 `crew_init` 尚未跟进，所以在 `dsh web` 这类长驻
+  进程里它仍按**进程启动目录**建目录，可能不是当前会话所在的项目。手动跑
+  `/crew-init` 前请确认启动目录，或直接让流水线的预检门去建（同样受此限制）。
 - **大小写不敏感文件系统上的围栏比较**。`startsWith` 前缀比较在 macOS/Windows 上，
   `realpathSync` 返回的大小写可能与配置值不一致。当前未处理。
 - **`trustedHosts` 有字段但无 schema 与界面绑定**，企业内网部署暂时只能走默认的

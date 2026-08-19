@@ -17,7 +17,7 @@ export const BUILTIN_ROLES: CrewRole[] = [
       'You implement one task from an existing written plan. Read the plan file you are given, '
       + 'implement exactly the task you were assigned, and stop. Do not expand scope, do not '
       + 'redesign, and do not start work the plan assigns to another task. Report what you changed '
-      + 'and how you verified it.',
+      + 'and how you verified it. When you finish, you MUST call the `report` tool with a self-contained answer: the agent that started you receives nothing otherwise — finishing a turn never reports automatically, and your own transcript is not visible to it. Report earlier too whenever a partial finding changes what it should do next.',
     // 移除委派工具：实现者不再向下分派。maxDepth 只限制深度而不限制扇出，
     // 直接移除工具更精确。
     toolFilter: { deny: ['subagent', 'subagent_fork'] },
@@ -30,7 +30,7 @@ export const BUILTIN_ROLES: CrewRole[] = [
       'You review an artifact and report findings. You do not modify it: the delegating agent '
       + 'owns every fix. Separate blocking problems (errors, self-contradiction, missing content '
       + 'that would make a later step fail) from non-blocking ones (style, wording, polish), and '
-      + 'state which is which. Report that you found nothing when you found nothing.',
+      + 'state which is which. Report that you found nothing when you found nothing. When you finish, you MUST call the `report` tool with a self-contained answer: the agent that started you receives nothing otherwise — finishing a turn never reports automatically, and your own transcript is not visible to it. Report earlier too whenever a partial finding changes what it should do next.',
     toolFilter: { deny: ['write', 'edit', 'subagent', 'subagent_fork'] },
   },
   {
@@ -39,7 +39,7 @@ export const BUILTIN_ROLES: CrewRole[] = [
     models: [{ alias: 'default', provider: '', model: '' }],
     persona:
       'You investigate a question and report what you found, with sources. You do not modify the '
-      + 'repository. Distinguish what you verified from what you inferred.',
+      + 'repository. Distinguish what you verified from what you inferred. When you finish, you MUST call the `report` tool with a self-contained answer: the agent that started you receives nothing otherwise — finishing a turn never reports automatically, and your own transcript is not visible to it. Report earlier too whenever a partial finding changes what it should do next.',
     toolFilter: { deny: ['write', 'edit', 'subagent', 'subagent_fork'] },
   },
 ]

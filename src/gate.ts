@@ -47,6 +47,21 @@ const CANDIDATE = new RegExp(
 )
 
 /**
+ * plans 目录的绝对路径，即围栏本体。
+ *
+ * 必须与候选路径共用 `options.cwd` 作为基准。曾经这里用的是隐式
+ * `resolve(options.plansDir)`（基准是 `process.cwd()`），而候选用
+ * `resolve(options.cwd, candidate)`：两个基准在 `options.cwd` 恰好等于
+ * `process.cwd()` 时一致，一旦不等（`dsh web` 是长驻进程，会话工作目录与进程
+ * 启动目录无关）围栏就落在别处，真实存在的合法计划路径被静默误拒。
+ * @param options - plans 目录与解析基准。
+ * @returns 围栏的绝对路径，不含末尾分隔符。
+ */
+export function planFence(options: PlanPathOptions): string {
+  return resolve(options.cwd, options.plansDir)
+}
+
+/**
  * 从 prompt 中解析出一个位于 plans 目录之内、真实存在的普通文件路径。
  *
  * 五步：候选提取 → `resolve` 规范化 → 围栏前缀检查 → 存在性与文件类型 →
@@ -60,10 +75,10 @@ const CANDIDATE = new RegExp(
  * @returns 第一个通过全部五步的绝对路径；没有则 `undefined`。
  */
 export function resolvePlanPath(prompt: string, options: PlanPathOptions): string | undefined {
-  const fence = resolve(options.plansDir) + sep
+  const fence = planFence(options) + sep
   let realFence: string
   try {
-    realFence = realpathSync(resolve(options.plansDir)) + sep
+    realFence = realpathSync(planFence(options)) + sep
   } catch {
     // plans 目录本身不存在或不可解析：任何候选都无法通过。
     return undefined
@@ -94,16 +109,41 @@ export function resolvePlanPath(prompt: string, options: PlanPathOptions): strin
 export interface GateDeps {
   /** 当前挂载的 implementer 角色工具名；空集表示无需拦截。 */
   readonly implementerToolNames: () => readonly string[]
-  /** 解析上下文。 */
-  readonly options: () => PlanPathOptions
+  /** 配置的 plans 目录，可以是相对路径。 */
+  readonly plansDir: () => string
+  /**
+   * 会话未携带 cwd 时的解析基准。
+   *
+   * 围栏基准优先取发起调用的会话自己的工作目录（`SessionHeader.cwd`，宿主在
+   * 会话创建时校验为绝对路径），它才是「这次任务在哪个项目里」的答案。
+   * `SessionHeader.cwd` 是可选字段，缺失时才落到这里。
+   */
+  readonly fallbackCwd: () => string
 }
 
-/** 拒绝理由：必须让模型知道怎么纠正，而不只是被拒。 */
-const DENY_REASON
-  = 'This implementer subagent must be given the path to a written plan file. '
-  + 'Include the plan file path (inside the configured plans directory) in the prompt, '
-  + 'and let the subagent read the file itself instead of pasting its contents here. '
-  + 'If no plan exists yet, produce one first.'
+/**
+ * 拒绝理由。
+ *
+ * 必须写出围栏的绝对路径与它的基准来源：模型给了路径却被拒时，只有这两项能让
+ * 它（和用户）看出「路径没错，是围栏在别处」。早先的版本只说「inside the
+ * configured plans directory」而不说那是哪个目录，一次工作目录错位因此变成不可
+ * 诊断的死局——模型认定自己漏了路径，反复重试同一个正确路径。
+ * @param fence - 围栏的绝对路径。
+ * @param basis - 围栏基准的来源，用于说明为什么围栏在那里。
+ * @returns 面向模型的拒绝文本。
+ */
+function denyReason(fence: string, basis: 'session' | 'fallback'): string {
+  const origin = basis === 'session'
+    ? 'resolved against this session\'s working directory'
+    : 'resolved against the host process working directory, because this session carries no cwd'
+  return 'This implementer subagent must be given the path to a written plan file. '
+    + `The prompt contained no existing plan file under ${fence} (${origin}). `
+    + 'Include a plan file path inside that directory and let the subagent read the file itself '
+    + 'instead of pasting its contents here. '
+    + 'If the plan you meant is outside that directory, the working directory or gate.plansDir is '
+    + 'misconfigured — report that instead of retrying. '
+    + 'If no plan exists yet, produce one first.'
+}
 
 /**
  * 注册纪律 guard：调用 implementer 角色工具时，prompt 中必须含一个可解析的
@@ -119,8 +159,16 @@ export function registerCrewGate(ctx: Context, deps: GateDeps): () => void {
   return ctx.tools.guard(execution => {
     const names = deps.implementerToolNames()
     if (!names.includes(execution.name)) return undefined
+    // 会话自己的工作目录才是「这次任务在哪个项目里」。`dsh web` 是长驻进程，
+    // 一个进程服务多个工作区，所以 process.cwd() 只能当缺失时的回退。
+    const sessionCwd = execution.agent?.session.header.cwd
+    const options: PlanPathOptions = {
+      plansDir: deps.plansDir(),
+      cwd: sessionCwd ?? deps.fallbackCwd(),
+    }
+    const reason = (): string => denyReason(planFence(options), sessionCwd === undefined ? 'fallback' : 'session')
     const prompt = (execution.arguments as { prompt?: unknown }).prompt
-    if (typeof prompt !== 'string') return DENY_REASON
-    return resolvePlanPath(prompt, deps.options()) === undefined ? DENY_REASON : undefined
+    if (typeof prompt !== 'string') return reason()
+    return resolvePlanPath(prompt, options) === undefined ? reason() : undefined
   })
 }
