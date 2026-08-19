@@ -6,9 +6,10 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { Config } from './config.ts'
 import { CrewCoordinator } from './coordinator.ts'
 import { registerCrewGate } from './gate.ts'
+import { registerCrewApi } from './http.ts'
 import { initDirs } from './init.ts'
 import type { SkippedRoute } from './mount.ts'
-import { registerCrewSettings } from './settings.ts'
+import { registerCrewSettings, SETTINGS_NAMESPACE } from './settings.ts'
 import { registerCrewSkills } from './skills/index.ts'
 import type { Config as ConfigType } from './types.ts'
 
@@ -128,6 +129,27 @@ export function apply(ctx: Context, config: ConfigType): void {
   ctx.effect(() => registerCrewSettings(ctx, config, next => {
     current = next
     void coordinator.sync(current.roles)
+  }))
+
+  // 插件自有的命名空间不在 dsh settings RPC 的服务端白名单
+  // （`WEB_SETTINGS_NAMESPACES`，见 packages/host/apiproxy/src/api-proxy.ts）内，
+  // 加入清单是宿主应用的决定，不是注册插件能单方面做到的；因此配置读写必须走
+  // 本插件自建的 HTTP 路由，客户端界面（若交付）也通过它读写，而非
+  // `ctx.settingsScope`。写路径用 `replace()` 而非 `update()`：HTTP 请求体
+  // 携带的是校验后的完整配置，而非要合并的局部 patch。
+  ctx.effect(() => registerCrewApi(ctx, {
+    readConfig: () => current,
+    readRevision: () => ctx.get('settings')
+      ?.describe({ redactSecrets: true })
+      .find(descriptor => descriptor.ns === SETTINGS_NAMESPACE)?.revision ?? 0,
+    writeConfig: async (next, expectedRevision) => {
+      const settings = ctx.get('settings')
+      if (settings === undefined) throw new Error('no settings provider composed')
+      await settings.replace(SETTINGS_NAMESPACE, next, expectedRevision)
+    },
+    mountedToolNames: () => coordinator.mountedToolNames(),
+    skippedRoutes: () => lastSkipped,
+    trustedHosts: [],
   }))
 
   void coordinator.sync(current.roles)
