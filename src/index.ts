@@ -9,7 +9,15 @@ import type { SkippedRoute } from './mount.ts'
 import type { Config as ConfigType } from './types.ts'
 
 export const name = 'dsh-dev-crew'
-export const inject = ['llm', 'tools', 'subagents']
+// 'systemPrompt' 不是本插件自己调用的服务：它是 apply() 内部
+// ctx.plugin(subagentTool, ...) 挂载的委派工具的依赖（@deepseek-ai/dsh-tool-subagent
+// 的运行时 inject 是 ['tools', 'subagents', 'systemPrompt']）。cordis 的 inject
+// 逐插件静态声明，不会从子插件的依赖反向推导；若宿主没组合 systemPrompt，缺了这一项
+// 会让内部子 fiber 静默卡在 PENDING（不报错、不记日志、协调器仍把它记成已挂载），
+// 而本插件自己却正常变成 ACTIVE。声明在这里，缺失时停在 PENDING 的是
+// dsh-dev-crew 这一行，用户能在自己直接挂载的地方看到状态。清理未使用的 inject 时
+// 不要删掉它。
+export const inject = ['llm', 'tools', 'subagents', 'systemPrompt']
 export { Config }
 
 /** 把一条被跳过的路由渲染成可操作的说明。 */
