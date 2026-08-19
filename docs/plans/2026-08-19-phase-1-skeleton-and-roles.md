@@ -11,8 +11,9 @@
 ## Global Constraints
 
 - 包名 `dsh-dev-crew`，`type: module`，ESM only。
-- `@deepseek-ai/*` 全部作为 **devDependencies** 并 **pin 到精确版本 `0.1.0-rc.6`**（无 `^`）。运行时由宿主提供，构建时 external。
-- **不可使用 `latest` 或 `^` 安装 `@deepseek-ai/dsh-*`**：npm 的 `dist-tags.latest` 指向陈旧的 `0.0.1-rc.1`，实际当前版本线为 `0.1.0-rc.x`。
+- `@deepseek-ai/*` 全部作为 **devDependencies** 并 **pin 到精确版本 `0.1.0-rc.7`**（无 `^`）。运行时由宿主提供，构建时 external。
+- **不可使用 `latest` 或 `^` 安装 `@deepseek-ai/dsh-*` 库包**：这些包的 `dist-tags.latest` 指向陈旧的 `0.0.1-rc.1`，实际当前版本线为 `0.1.0-rc.x`。（CLI 包 `@deepseek-ai/dsh` 的 dist-tag 正常，不受此限。）
+- **版本必须整条线统一**：`0.1.0-rc.6` 的库包互相声明 `^0.1.0-rc.6` 的 peer 依赖，npm 解析该范围时会取 `rc.7`，而 `rc.7` 又要求其 peer 同为 `rc.7` —— 混用会产生无法解析的 ERESOLVE 冲突。统一 rc.7 后 21 个包干净解析，不需要 `--legacy-peer-deps`。
 - `@deepseek-ai/cordis` 使用 `^4.0.1`。
 - 复用官方插件工厂时**必须传入整个模块命名空间**（`import * as subagentTool`），不可单独传 `apply` —— 后者会丢失 `inject` 声明，导致运行时抛 `cannot get property "subagents" without inject`。
 - 子代理后端固定 `spawn`，`backgroundMode` 固定 `continuable`，不提供 fork 选项。
@@ -85,10 +86,10 @@
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/schemastery": "^3.18.1",
-    "@deepseek-ai/dsh-agent": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-tool-subagent": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-agent": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-tool-subagent": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-tools": "0.1.0-rc.7",
     "@types/node": "^22.15.0",
     "esbuild": "^0.28.2",
     "typescript": "^5.9.0",
