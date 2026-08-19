@@ -23,8 +23,7 @@ describe('registerCrewSkills', () => {
   it('registers the crew skills declared so far', () => {
     const { ctx, registered } = fakeCtx()
     registerCrewSkills(ctx)
-    // Task 6 把这里扩到四项：['crew', 'crew-brainstorm', 'crew-plan', 'crew-converge']
-    expect(registered.map(s => s.name)).toEqual(['crew-brainstorm', 'crew-plan'])
+    expect(registered.map(s => s.name)).toEqual(['crew', 'crew-brainstorm', 'crew-plan', 'crew-converge'])
   })
 
   it('exposes authoring skills on both surfaces', () => {
@@ -46,12 +45,17 @@ describe('registerCrewSkills', () => {
     const { ctx, disposers } = fakeCtx()
     const dispose = registerCrewSkills(ctx)
     dispose()
-    // Task 6 把这里改成 4
-    expect(disposers).toHaveBeenCalledTimes(2)
+    expect(disposers).toHaveBeenCalledTimes(4)
   })
 
   it('has generated content for every declared skill', () => {
-    // Task 6 把这里扩到四项
-    expect(Object.keys(SKILL_CONTENTS).sort()).toEqual(['crew-brainstorm', 'crew-plan'])
+    expect(Object.keys(SKILL_CONTENTS).sort()).toEqual(['crew', 'crew-brainstorm', 'crew-converge', 'crew-plan'])
+  })
+
+  it('keeps crew-converge invisible to human command surfaces', () => {
+    const { ctx, registered } = fakeCtx()
+    registerCrewSkills(ctx)
+    expect(registered.find(s => s.name === 'crew-converge')?.invocation)
+      .toEqual({ modelInvocable: true, userInvocable: false })
   })
 })

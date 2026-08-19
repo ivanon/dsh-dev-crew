@@ -22,6 +22,13 @@ interface CrewSkillMeta {
  */
 const CREW_SKILLS: readonly CrewSkillMeta[] = [
   {
+    name: 'crew',
+    description: '端到端开发流水线：需求讨论、写计划、分派实现、多轮评审收敛、汇总报告。',
+    whenToUse: '用户要求走完整开发流程，或明确提到 crew / 开发流水线时。',
+    modelInvocable: true,
+    userInvocable: true,
+  },
+  {
     name: 'crew-brainstorm',
     description: '把一个开发需求讨论成可实施的规格文档。',
     whenToUse: '需求模糊、需要先讨论清楚再动手时。',
@@ -35,7 +42,13 @@ const CREW_SKILLS: readonly CrewSkillMeta[] = [
     modelInvocable: true,
     userInvocable: true,
   },
-  // `crew` 与 `crew-converge` 在 Task 6 随其正文一并加入。
+  {
+    name: 'crew-converge',
+    description: '评审收敛协议：并行评审、分类阻塞项、修复复审、到上限转遗留。',
+    whenToUse: '流水线内部机制，由 crew 调用。',
+    modelInvocable: true,
+    userInvocable: false,
+  },
 ]
 
 /**
