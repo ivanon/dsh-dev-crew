@@ -195,6 +195,23 @@ reviewer 因此需要写权限，`toolFilter.deny` 里没有 `write`。**这道�
 reviewer 若始终不落盘，编排者退回用摘要自己转录一份，并在文件里注明是转录——一份没写
 下来的评审等于没评审，但也不值得为落盘失败中止整条流水线。
 
+## 循环卫生 guard：拦截 `list_agents` 轮询
+
+`loopGuard.enabled`（默认 `true`）开启时，`ctx.tools.guard()` 统计每个 agent 对
+`list_agents` 的**连续**调用次数，超过 `loopGuard.maxConsecutiveAgentListings`
+（默认 3）即拒绝。任何其他工具调用都会把计数清零，所以「查一次状态再做别的事」不受
+影响；计数按发起调用的 Agent 分别累计（`WeakMap` 键为 Agent 对象，随其回收释放），
+子代理的轮询不会拖累编排者。
+
+**为什么需要它**：编排者想「执行等待」，而唯一看起来像等待的工具就是 `list_agents`。
+真实会话里它一次连调 149 次、单次会话累计 1069 次，直到模型额度耗尽（403 usage
+limit）才停——期间子代理的回报消息已经到达，循环却没被打断。宿主自带的重复调用告警
+（"You are repeating the exact same tool call"）只是提示，实测无法阻止。skill 正文
+写了「不要轮询」同样无效，所以这条约束必须在工具层强制。
+
+拒绝理由讲清了等待的正确做法：**结束本次响应、不调用任何工具**，运行时会在通知到达
+时开启新一轮。
+
 ## 纪律 gate：调用 implementer 前必须给出 plan 路径
 
 `gate.enabled`（默认 `true`）开启时，`ctx.tools.guard()` 拦截所有

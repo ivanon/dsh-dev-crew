@@ -49,4 +49,15 @@ export interface Config {
     /** 每个评审环节的收敛轮数上限。达到上限仍有阻塞项则转遗留清单。 */
     maxConvergenceRounds: number
   }
+  /** 循环卫生 guard 配置。 */
+  loopGuard: {
+    /** 是否启用。关闭后只剩 skill 正文的文字约束，实测不足以阻止轮询循环。 */
+    enabled: boolean
+    /**
+     * `list_agents` 允许的连续调用次数，超过即拒绝。
+     *
+     * 任何其他工具调用都会把计数清零，所以「查一次状态再做别的事」不受影响。
+     */
+    maxConsecutiveAgentListings: number
+  }
 }

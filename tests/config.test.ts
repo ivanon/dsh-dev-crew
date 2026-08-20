@@ -85,6 +85,18 @@ describe('Config schema', () => {
     expect(new Config({}).artifactDirs).toContain('docs/reviews')
   })
 
+  it('supplies loop guard defaults', () => {
+    const guard = new Config({}).loopGuard
+    expect(guard.enabled).toBe(true)
+    expect(guard.maxConsecutiveAgentListings).toBe(3)
+  })
+
+  it('rejects a consecutive-listing limit below one', () => {
+    // 0 会让第一次 list_agents 就被拒，那不是「关闭」而是「完全禁用」——
+    // 关闭要走 enabled: false。
+    expect(() => new Config({ loopGuard: { enabled: true, maxConsecutiveAgentListings: 0 } })).toThrow()
+  })
+
   it('rejects a convergence limit outside the allowed range', () => {
     expect(() => new Config({ pipeline: { maxConvergenceRounds: 0 } })).toThrow()
   })

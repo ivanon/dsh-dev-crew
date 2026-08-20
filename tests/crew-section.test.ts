@@ -58,6 +58,7 @@ describe('withoutTemplateFields', () => {
       role({ id: 'reviewer', persona: 'another template body' }),
     ],
     pipeline: { maxConvergenceRounds: 5 },
+    loopGuard: { enabled: true, maxConsecutiveAgentListings: 3 },
     gate: { enabled: true, plansDir: 'docs/plans' },
     artifactDirs: ['docs/specs'],
   })
@@ -132,6 +133,7 @@ describe('providersInUse', () => {
         role({ id: 'researcher', models: [{ alias: 'a', provider: '', model: '' }] }),
       ],
       pipeline: { maxConvergenceRounds: 5 },
+    loopGuard: { enabled: true, maxConsecutiveAgentListings: 3 },
       gate: { enabled: true, plansDir: 'docs/plans' },
       artifactDirs: [],
     }
@@ -142,6 +144,7 @@ describe('providersInUse', () => {
     const config: Config = {
       roles: [role({ models: [{ alias: 'a', provider: '', model: '' }] })],
       pipeline: { maxConvergenceRounds: 5 },
+    loopGuard: { enabled: true, maxConsecutiveAgentListings: 3 },
       gate: { enabled: true, plansDir: 'docs/plans' },
       artifactDirs: [],
     }

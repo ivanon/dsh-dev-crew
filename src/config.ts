@@ -133,4 +133,8 @@ export const Config: Schema<Partial<ConfigType>, ConfigType> = Schema.object({
   pipeline: Schema.object({
     maxConvergenceRounds: Schema.number().min(1).max(10).default(3),
   }).default({ maxConvergenceRounds: 3 }),
+  loopGuard: Schema.object({
+    enabled: Schema.boolean().default(true),
+    maxConsecutiveAgentListings: Schema.number().min(1).max(50).default(3),
+  }).default({ enabled: true, maxConsecutiveAgentListings: 3 }),
 })

@@ -6,6 +6,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { Config } from './config.ts'
 import { CrewCoordinator } from './coordinator.ts'
 import { registerCrewGate } from './gate.ts'
+import { registerLoopGuard } from './loop-guard.ts'
 import { registerCrewApi } from './http.ts'
 import { initDirs } from './init.ts'
 import type { SkippedRoute } from './mount.ts'
@@ -144,6 +145,14 @@ export function apply(ctx: Context, config: ConfigType): void {
         .filter(name => name === 'subagent_implementer' || name.startsWith('subagent_implementer_')),
       plansDir: () => current.gate.plansDir,
       fallbackCwd: () => process.cwd(),
+    }))
+  }
+
+  // 循环卫生：编排者反复调用 `list_agents` 假装自己在等待，实测单次会话 1069 次、
+  // 最长连续 149 次，直到模型额度耗尽。与 gate.enabled 同理，这里也在挂载时读一次。
+  if (config.loopGuard.enabled) {
+    ctx.effect(() => registerLoopGuard(ctx, {
+      limit: () => current.loopGuard.maxConsecutiveAgentListings,
     }))
   }
 

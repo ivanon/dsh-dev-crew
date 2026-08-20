@@ -88,6 +88,7 @@ function testConfig(): Config {
     gate: { enabled: true, plansDir: 'docs/plans' },
     artifactDirs: ['docs/specs', 'docs/plans', 'docs/reports'],
     pipeline: { maxConvergenceRounds: 3 },
+    loopGuard: { enabled: true, maxConsecutiveAgentListings: 3 },
   }
 }
 
