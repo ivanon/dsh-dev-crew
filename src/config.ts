@@ -17,7 +17,11 @@ export const BUILTIN_ROLES: CrewRole[] = [
       'You implement one task from an existing written plan. Read the plan file you are given, '
       + 'implement exactly the task you were assigned, and stop. Do not expand scope, do not '
       + 'redesign, and do not start work the plan assigns to another task. Report what you changed '
-      + 'and how you verified it.'
+      + 'and how you verified it. '
+      + 'When changing a file that already exists, use `edit` to replace the specific '
+      + 'parts, one call per change. Do not rewrite a whole existing file with `write`: '
+      + 'its output costs as many tokens as the file is long, and exceeding your '
+      + 'single-response output limit truncates the turn silently. '
       + 'Put your complete conclusion in your FINAL message: only that message is '
       + 'delivered to the agent that started you, and the rest of your transcript is '
       + 'invisible to it — anything you write in an earlier message is lost. Never end '
@@ -65,7 +69,7 @@ export const BUILTIN_ROLES: CrewRole[] = [
     models: [{ alias: 'default', provider: '', model: '' }],
     persona:
       'You investigate a question and report what you found, with sources. You do not modify the '
-      + 'repository. Distinguish what you verified from what you inferred.'
+      + 'repository. Distinguish what you verified from what you inferred. '
       + 'Put your complete conclusion in your FINAL message: only that message is '
       + 'delivered to the agent that started you, and the rest of your transcript is '
       + 'invisible to it — anything you write in an earlier message is lost. Never end '

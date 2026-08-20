@@ -125,6 +125,33 @@ describe('builtin role tool filters', () => {
   })
 })
 
+describe('persona string assembly', () => {
+  it('never runs a sentence into the next one', () => {
+    // persona 是多段字符串拼接。某一段漏掉尾部空格，模型读到的就是
+    // "verified it.Put your complete conclusion" —— 编译通过、测试通过、
+    // 只有模型看得见。
+    for (const role of BUILTIN_ROLES) {
+      expect(role.persona, `role "${role.id}"`).not.toMatch(/[a-z]\.[A-Z]/)
+    }
+  })
+
+  it('never doubles a space at a seam', () => {
+    for (const role of BUILTIN_ROLES) {
+      expect(role.persona, `role "${role.id}"`).not.toContain('  ')
+    }
+  })
+})
+
+describe('edit-over-write guidance', () => {
+  it('tells the implementer to edit existing files instead of rewriting them', () => {
+    // 一次 write 整份文件的输出量等于文件全长，撞上单次输出上限会让那一轮以
+    // max-tokens 静默结束、不自动继续——真实会话里编排者就这样停住过。
+    const implementer = BUILTIN_ROLES.find(role => role.id === 'implementer')
+    expect(implementer?.persona).toContain('`edit`')
+    expect(implementer?.persona).toContain('one call per change')
+  })
+})
+
 describe('reviewer write access', () => {
   it('lets the reviewer write, so it can land its own review file', () => {
     // 意见由 reviewer 自己落盘，全文因此不必挤进「只有最后一条消息会被带回」
