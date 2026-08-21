@@ -59,3 +59,38 @@ describe('registerCrewSkills', () => {
       .toEqual({ modelInvocable: true, userInvocable: false })
   })
 })
+
+describe('tool field names quoted in skill bodies', () => {
+  const body = (name: string): string => {
+    const found = SKILL_CONTENTS[name]
+    if (found === undefined) throw new Error(`no skill content for "${name}"`)
+    return found
+  }
+
+  it('spells ask_user_question multi-select with an underscore', () => {
+    // 宿主的 schema 字段是 `multi_select`（tool-ask-user 里唯一的 snake_case），
+    // 而 additionalProperties: true 让拼成 `multiSelect` 既不报错也不生效——题目
+    // 静默退化成单选。真实会话里主 agent 照着写错的示例传了 multiSelect: true，
+    // 问题文本写着「（多选）」，界面却只能选一个。
+    //
+    // 只查 JSON 示例块：正文里那句「写成 multiSelect 会被静默忽略」是警示，
+    // 必须保留。
+    const block = /```json\n([\s\S]*?)```/.exec(body('crew-brainstorm'))?.[1] ?? ''
+    expect(block).toContain('multi_select')
+    expect(block).not.toMatch(/multiSelect/)
+  })
+
+  it('quotes only field names the host actually accepts', () => {
+    // 逐字抄自 packages/interaction/tool-ask-user/src/index.ts 的 parameters。
+    const accepted = ['id', 'question', 'header', 'options', 'label', 'description', 'multi_select']
+    const text = body('crew-brainstorm')
+    // 从示例 JSON 里取出所有被引号包起来的键，逐个核对。
+    const block = /```json\n([\s\S]*?)```/.exec(text)?.[1] ?? ''
+    const keys = [...block.matchAll(/"([a-zA-Z_]+)":/g)].map(m => m[1]!)
+    expect(keys.length).toBeGreaterThan(0)
+    for (const key of keys) {
+      if (key === 'questions') continue
+      expect(accepted, `示例里的 "${key}" 不是宿主接受的字段`).toContain(key)
+    }
+  })
+})

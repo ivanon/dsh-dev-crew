@@ -34,7 +34,7 @@ description: 把一个开发需求讨论成可实施的规格文档。用于流�
         { "label": "SQLite（推荐）", "description": "零运维，单机足够，以后要换也只动一层" },
         { "label": "PostgreSQL", "description": "多实例共享，但现在还没有多实例需求" }
       ],
-      "multiSelect": false
+      "multi_select": false
     }
   ]
 }
@@ -44,7 +44,8 @@ description: 把一个开发需求讨论成可实施的规格文档。用于流�
 - `header` 是几个字的短标题，`question` 是完整问句
 - `options` 每一项都要写 `description`，一句话说清取舍或影响
 - 推荐项放第一个，`label` 末尾标「（推荐）」
-- 只有答案确实可以多选时才设 `multiSelect: true`，默认 `false`
+- 只有答案确实可以多选时才设 `multi_select: true`，默认 `false`。**字段名是下划线**——这是这个工具唯一的 snake_case 字段，写成 `multiSelect` 会被**静默忽略**（schema 允许额外属性，不报错），题目于是变成单选
+- 问题文本写了「（多选）」就必须同时设 `multi_select: true`，两者不一致等于骗用户
 
 **一次只问一个问题。** 一口气抛五个问题，得到的是五个敷衍的答案。工具允许一次传多个元素，但那等于回到了纯文本一次性提问。
 
