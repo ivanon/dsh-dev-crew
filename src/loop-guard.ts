@@ -13,6 +13,17 @@ import type { Context } from '@deepseek-ai/cordis'
  */
 const LISTING_TOOL = 'list_agents'
 
+/**
+ * 提问工具名。
+ *
+ * 它会阻塞等待用户输入，因此在编排者眼里最像"等待"。真实会话里编排者派出
+ * reviewer 之后先跑了一次 `bash echo "waiting"`（description 自陈
+ * "Placeholder while waiting for reviewer"），紧接着用一个空问题调用它：
+ * `{id:"placeholder", header:"Wait", question:"This is a placeholder", options:[]}`。
+ * 流水线就此卡在一个无法有意义回答的选择框上。
+ */
+const ASK_TOOL = 'ask_user_question'
+
 /** 每个 Agent 最近一次经过 guard 的工具，以及它连续出现的次数。 */
 interface Streak {
   tool: string
@@ -61,6 +72,26 @@ function denyDuplicateReviewer(tool: string): string {
     + 'configures more than one model on the reviewer role, which mounts one tool per model.'
 }
 
+/**
+ * 空问题的拒绝理由。
+ *
+ * `options: []` 语义上是"这里有一份选项列表，但列表是空的"——无效调用。真正需要
+ * 自由输入的问题应当**省略** `options`。空列表几乎只出现在一种场合：编排者想执行
+ * "等待"，而这个工具是它能找到的最像等待的动作。
+ * @returns 面向模型的拒绝文本。
+ */
+function denyEmptyQuestion(): string {
+  return `A question in this ${ASK_TOOL} call has an empty options list. `
+    + 'An empty list means "here is a list of choices" and then offers none; omit `options` '
+    + 'entirely when the answer must be free text. '
+    + 'If you called this to wait for a background subagent: waiting is not an action. '
+    + 'END YOUR RESPONSE NOW — emit one sentence naming what you dispatched and what you are '
+    + 'waiting for, and call no tool at all. That sentence ends your turn; the runtime wakes '
+    + 'you when the subagent settles. A placeholder question, a `bash echo`, or any other '
+    + 'filler call does not wait — it only spends tokens and, in this tool\'s case, blocks the '
+    + 'pipeline on a prompt the user cannot meaningfully answer.'
+}
+
 /** guard 注册所需的外部依赖。 */
 export interface LoopGuardDeps {
   /** `list_agents` 允许的连续调用次数；超过即拒绝。 */
@@ -78,8 +109,9 @@ export interface LoopGuardDeps {
 /**
  * 注册循环卫生 guard。
  *
- * 拦截两种病态调用：对 {@link LISTING_TOOL} 的连续轮询，以及同一 reviewer 工具的
- * 连续重复派发。
+ * 拦截三种病态调用：对 {@link LISTING_TOOL} 的连续轮询、同一 reviewer 工具的连续
+ * 重复派发，以及 {@link ASK_TOOL} 的空选项问题。三者都是编排者"假装自己在做事"的
+ * 形态——前两种烧 token，第三种还会把流水线卡在一个无法回答的提示上。
  *
  * 用 `ctx.tools.guard()` 而非 `tools/pre-execute`：guard 是单调的，后续 waterfall
  * 监听器无法把拒绝变回许可。宿主自带的重复调用告警（"You are repeating the exact
@@ -101,6 +133,13 @@ export function registerLoopGuard(ctx: Context, deps: LoopGuardDeps): () => void
       : { tool: execution.name, count: 1 }
     if (agent === undefined) agentless = streak
     else perAgent.set(agent, streak)
+
+    if (execution.name === ASK_TOOL) {
+      const args = execution.arguments as { questions?: readonly { options?: readonly unknown[] }[] }
+      // 只看显式给出的空列表；省略 `options` 是合法的自由输入题。
+      const empty = args.questions?.some(q => q.options !== undefined && q.options.length === 0)
+      return empty === true ? denyEmptyQuestion() : undefined
+    }
 
     if (execution.name === LISTING_TOOL) {
       const limit = deps.listingLimit()

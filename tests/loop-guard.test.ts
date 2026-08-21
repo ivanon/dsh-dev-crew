@@ -9,10 +9,14 @@ import type { Context } from '@deepseek-ai/cordis'
  * WeakMap 的键）；省略表示无 agent 的执行路径。
  */
 function fakeToolsCtx() {
-  interface FakeExecution { name: string; agent?: object }
+  interface FakeExecution { name: string; agent?: object; arguments?: unknown }
   let guard: ((execution: FakeExecution) => string | undefined) | undefined
   return {
-    call: (name: string, agent?: object) => guard?.({ name, ...agent === undefined ? {} : { agent } }),
+    call: (name: string, agent?: object, args?: unknown) => guard?.({
+      name,
+      ...agent === undefined ? {} : { agent },
+      ...args === undefined ? {} : { arguments: args },
+    }),
     ctx: { tools: { guard: (fn: typeof guard) => { guard = fn; return () => {} } } } as unknown as Context,
   }
 }
@@ -158,6 +162,59 @@ describe('duplicate reviewer dispatch', () => {
     const agent = {}
     for (let i = 0; i < 15; i += 1) {
       expect(call('subagent_implementer', agent)).toBeUndefined()
+    }
+  })
+})
+
+describe('placeholder questions', () => {
+  const deps = { listingLimit: () => 3, reviewerToolNames: () => ['subagent_reviewer'] }
+  const ask = (options?: unknown[]) => ({
+    questions: [{ id: 'q', question: '?', ...options === undefined ? {} : { options } }],
+  })
+
+  it('denies a question whose options list is empty', () => {
+    // 真实会话：派出 reviewer 后用 {id:"placeholder", header:"Wait", options:[]}
+    // 假装等待，流水线卡在一个无法回答的选择框上。
+    const { call, ctx } = fakeToolsCtx()
+    registerLoopGuard(ctx, deps)
+    const denial = call('ask_user_question', {}, ask([]))
+    expect(denial).toContain('empty options list')
+    expect(denial).toContain('END YOUR RESPONSE NOW')
+  })
+
+  it('names the filler forms so it stops looking for another one', () => {
+    const { call, ctx } = fakeToolsCtx()
+    registerLoopGuard(ctx, deps)
+    expect(call('ask_user_question', {}, ask([]))).toContain('bash echo')
+  })
+
+  it('allows a free-text question that omits options', () => {
+    // 省略 options 是合法的自由输入题，不是占位。
+    const { call, ctx } = fakeToolsCtx()
+    registerLoopGuard(ctx, deps)
+    expect(call('ask_user_question', {}, ask())).toBeUndefined()
+  })
+
+  it('allows a normal multiple-choice question', () => {
+    const { call, ctx } = fakeToolsCtx()
+    registerLoopGuard(ctx, deps)
+    expect(call('ask_user_question', {}, ask([{ label: 'A' }, { label: 'B' }]))).toBeUndefined()
+  })
+
+  it('denies when any one question in a batch is empty', () => {
+    const { call, ctx } = fakeToolsCtx()
+    registerLoopGuard(ctx, deps)
+    const args = { questions: [{ id: 'a', question: '?', options: [{ label: 'A' }] }, { id: 'b', question: '?', options: [] }] }
+    expect(call('ask_user_question', {}, args)).toContain('empty options list')
+  })
+
+  it('does not count ask_user_question toward the polling streak', () => {
+    // brainstorm 环节合法地连续提问，一次一个问题。
+    const { call, ctx } = fakeToolsCtx()
+    registerLoopGuard(ctx, deps)
+    const agent = {}
+    for (let i = 0; i < 10; i += 1) {
+      expect(call('ask_user_question', agent, ask([{ label: 'A' }]))).toBeUndefined()
     }
   })
 })

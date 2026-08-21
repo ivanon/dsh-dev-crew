@@ -247,7 +247,15 @@ B1」写进去等于向自己声明这件事由自己做。真实会话里编排
 **一、`list_agents` 轮询** —— 连续调用超过 `loopGuard.maxConsecutiveAgentListings`
 （默认 3）即拒绝。
 
-**二、重复派发同一 reviewer** —— 同一个 `subagent_reviewer*` 工具连续派发第二次即
+**二、空选项的提问** —— `ask_user_question` 里任何一个问题带着 `options: []` 即拒绝。
+那语义上是「这里有一份选项列表」然后一个都不给，而它几乎只出现在一种场合：编排者想
+执行「等待」，而这个工具会阻塞等用户输入，是它能找到的最像等待的动作。真实会话里编
+排者派出 reviewer 后先跑了 `bash echo "waiting"`（description 自陈 "Placeholder while
+waiting for reviewer"），紧接着发出
+`{id:"placeholder", header:"Wait", question:"This is a placeholder", options:[]}`——流水线
+就卡死在一个用户无法回答的选择框上。省略 `options` 的自由输入题不受影响。
+
+**三、重复派发同一 reviewer** —— 同一个 `subagent_reviewer*` 工具连续派发第二次即
 拒绝。真实会话里编排者用两段不同 prompt 把同一个工具派了两次、自称「第二视角」，还把
 两份评审文件分别命名为 `..._r1-subagent_reviewer.md` 与 `..._r1-subagent_reviewer_2.md`
 ——两次跑的是同一个 provider 与 model，不构成独立视角，只是让这一环节成本翻倍。视角
