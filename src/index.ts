@@ -153,6 +153,8 @@ export function apply(ctx: Context, config: ConfigType): void {
   if (config.loopGuard.enabled) {
     ctx.effect(() => registerLoopGuard(ctx, {
       listingLimit: () => current.loopGuard.maxConsecutiveAgentListings,
+      // 全部角色工具：任何一个被派发即进入等待期。
+      roleToolNames: () => coordinator.mountedToolNames(),
       // 与 gate 的 implementerToolNames 同一条命名规则：精确匹配，不能用
       // startsWith('subagent_reviewer')，那会把自定义角色 `reviewer-v2` 也算进来。
       reviewerToolNames: () => coordinator.mountedToolNames()

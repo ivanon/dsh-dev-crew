@@ -24,7 +24,7 @@ function fakeToolsCtx() {
 describe('registerLoopGuard', () => {
   it('allows list_agents up to the limit', () => {
     const { call, ctx } = fakeToolsCtx()
-    registerLoopGuard(ctx, { listingLimit: () => 3, reviewerToolNames: () => [] })
+    registerLoopGuard(ctx, { listingLimit: () => 3, reviewerToolNames: () => [], roleToolNames: () => [] })
     const agent = {}
     expect(call('list_agents', agent)).toBeUndefined()
     expect(call('list_agents', agent)).toBeUndefined()
@@ -33,7 +33,7 @@ describe('registerLoopGuard', () => {
 
   it('denies the call past the limit', () => {
     const { call, ctx } = fakeToolsCtx()
-    registerLoopGuard(ctx, { listingLimit: () => 3, reviewerToolNames: () => [] })
+    registerLoopGuard(ctx, { listingLimit: () => 3, reviewerToolNames: () => [], roleToolNames: () => [] })
     const agent = {}
     for (let i = 0; i < 3; i += 1) call('list_agents', agent)
     const denial = call('list_agents', agent)
@@ -44,7 +44,7 @@ describe('registerLoopGuard', () => {
   it('tells the model that waiting is the absence of an action', () => {
     // 这是循环的根因：模型想「执行等待」，而唯一像等待的工具就是 list_agents。
     const { call, ctx } = fakeToolsCtx()
-    registerLoopGuard(ctx, { listingLimit: () => 1, reviewerToolNames: () => [] })
+    registerLoopGuard(ctx, { listingLimit: () => 1, reviewerToolNames: () => [], roleToolNames: () => [] })
     const agent = {}
     call('list_agents', agent)
     expect(call('list_agents', agent)).toContain('not an action you perform')
@@ -52,7 +52,7 @@ describe('registerLoopGuard', () => {
 
   it('resets the streak on any other tool call', () => {
     const { call, ctx } = fakeToolsCtx()
-    registerLoopGuard(ctx, { listingLimit: () => 2, reviewerToolNames: () => [] })
+    registerLoopGuard(ctx, { listingLimit: () => 2, reviewerToolNames: () => [], roleToolNames: () => [] })
     const agent = {}
     call('list_agents', agent)
     call('list_agents', agent)
@@ -66,7 +66,7 @@ describe('registerLoopGuard', () => {
   it('counts each agent separately', () => {
     // 子代理与编排者共用全局工具注册表，一个的轮询不该拖累另一个。
     const { call, ctx } = fakeToolsCtx()
-    registerLoopGuard(ctx, { listingLimit: () => 1, reviewerToolNames: () => [] })
+    registerLoopGuard(ctx, { listingLimit: () => 1, reviewerToolNames: () => [], roleToolNames: () => [] })
     const orchestrator = {}
     const child = {}
     call('list_agents', orchestrator)
@@ -76,7 +76,7 @@ describe('registerLoopGuard', () => {
 
   it('never touches tools other than list_agents', () => {
     const { call, ctx } = fakeToolsCtx()
-    registerLoopGuard(ctx, { listingLimit: () => 1, reviewerToolNames: () => [] })
+    registerLoopGuard(ctx, { listingLimit: () => 1, reviewerToolNames: () => [], roleToolNames: () => [] })
     const agent = {}
     for (let i = 0; i < 50; i += 1) expect(call('read', agent)).toBeUndefined()
   })
@@ -85,7 +85,7 @@ describe('registerLoopGuard', () => {
     // 配置热更新后无需重挂 guard。
     let limit = 5
     const { call, ctx } = fakeToolsCtx()
-    registerLoopGuard(ctx, { listingLimit: () => limit, reviewerToolNames: () => [] })
+    registerLoopGuard(ctx, { listingLimit: () => limit, reviewerToolNames: () => [], roleToolNames: () => [] })
     const agent = {}
     call('list_agents', agent)
     call('list_agents', agent)
@@ -95,7 +95,7 @@ describe('registerLoopGuard', () => {
 
   it('tracks the agentless execution path on its own counter', () => {
     const { call, ctx } = fakeToolsCtx()
-    registerLoopGuard(ctx, { listingLimit: () => 1, reviewerToolNames: () => [] })
+    registerLoopGuard(ctx, { listingLimit: () => 1, reviewerToolNames: () => [], roleToolNames: () => [] })
     call('list_agents')
     expect(call('list_agents')).toContain('END YOUR RESPONSE NOW')
     expect(call('read')).toBeUndefined()
@@ -104,7 +104,7 @@ describe('registerLoopGuard', () => {
 })
 
 describe('duplicate reviewer dispatch', () => {
-  const deps = { listingLimit: () => 3, reviewerToolNames: () => ['subagent_reviewer'] }
+  const deps = { listingLimit: () => 3, reviewerToolNames: () => ['subagent_reviewer'], roleToolNames: () => ['subagent_reviewer', 'subagent_implementer'] }
 
   it('allows the first dispatch of a review round', () => {
     const { call, ctx } = fakeToolsCtx()
@@ -148,6 +148,7 @@ describe('duplicate reviewer dispatch', () => {
     registerLoopGuard(ctx, {
       listingLimit: () => 3,
       reviewerToolNames: () => ['subagent_reviewer_ds', 'subagent_reviewer_kimi'],
+      roleToolNames: () => ['subagent_reviewer_ds', 'subagent_reviewer_kimi'],
     })
     const agent = {}
     expect(call('subagent_reviewer_ds', agent)).toBeUndefined()
@@ -167,7 +168,7 @@ describe('duplicate reviewer dispatch', () => {
 })
 
 describe('placeholder questions', () => {
-  const deps = { listingLimit: () => 3, reviewerToolNames: () => ['subagent_reviewer'] }
+  const deps = { listingLimit: () => 3, reviewerToolNames: () => ['subagent_reviewer'], roleToolNames: () => ['subagent_reviewer', 'subagent_implementer'] }
   const ask = (options?: unknown[]) => ({
     questions: [{ id: 'q', question: '?', ...options === undefined ? {} : { options } }],
   })
@@ -216,5 +217,93 @@ describe('placeholder questions', () => {
     for (let i = 0; i < 10; i += 1) {
       expect(call('ask_user_question', agent, ask([{ label: 'A' }]))).toBeUndefined()
     }
+  })
+})
+
+describe('asking while waiting', () => {
+  const deps = {
+    listingLimit: () => 3,
+    reviewerToolNames: () => ['subagent_reviewer'],
+    roleToolNames: () => ['subagent_reviewer', 'subagent_implementer'],
+  }
+  const ask = { questions: [{ id: 'q', question: '继续等待还是中止？', options: [{ label: '等' }, { label: '中止' }] }] }
+
+  it('denies a well-formed question right after a dispatch', () => {
+    // 第四种假等待形态：两个像样的选项，既非空列表也不与派发相邻计数。
+    const { call, ctx } = fakeToolsCtx()
+    registerLoopGuard(ctx, deps)
+    const agent = {}
+    call('subagent_reviewer', agent)
+    const denial = call('ask_user_question', agent, ask)
+    expect(denial).toContain('waiting phase')
+    expect(denial).toContain('END YOUR RESPONSE NOW')
+  })
+
+  it('keeps denying across intervening list_agents calls', () => {
+    // 真实会话：派发 → list_agents ×3 → 提问。中间的轮询不算工作，等待期不解除。
+    const { call, ctx } = fakeToolsCtx()
+    registerLoopGuard(ctx, deps)
+    const agent = {}
+    call('subagent_reviewer', agent)
+    call('list_agents', agent)
+    call('list_agents', agent)
+    expect(call('ask_user_question', agent, ask)).toContain('waiting phase')
+  })
+
+  it('keeps denying repeated attempts', () => {
+    // 拒绝一次就放行的话，它只要再问一遍就能把等待推给用户。
+    const { call, ctx } = fakeToolsCtx()
+    registerLoopGuard(ctx, deps)
+    const agent = {}
+    call('subagent_reviewer', agent)
+    expect(call('ask_user_question', agent, ask)).toContain('waiting phase')
+    expect(call('ask_user_question', agent, ask)).toContain('waiting phase')
+    expect(call('ask_user_question', agent, ask)).toContain('waiting phase')
+  })
+
+  it('allows questions again once real work happened', () => {
+    // 收到回报后编排者会读文件、改文件——那说明它在处理结果而不是在等。
+    const { call, ctx } = fakeToolsCtx()
+    registerLoopGuard(ctx, deps)
+    const agent = {}
+    call('subagent_reviewer', agent)
+    call('read', agent)
+    expect(call('ask_user_question', agent, ask)).toBeUndefined()
+  })
+
+  it('allows brainstorm questions before any dispatch', () => {
+    // 需求讨论环节合法地连续提问，那时还没派出任何子代理。
+    const { call, ctx } = fakeToolsCtx()
+    registerLoopGuard(ctx, deps)
+    const agent = {}
+    for (let i = 0; i < 8; i += 1) {
+      expect(call('ask_user_question', agent, ask)).toBeUndefined()
+    }
+  })
+
+  it('treats an implementer dispatch the same way', () => {
+    const { call, ctx } = fakeToolsCtx()
+    registerLoopGuard(ctx, deps)
+    const agent = {}
+    call('subagent_implementer', agent)
+    expect(call('ask_user_question', agent, ask)).toContain('waiting phase')
+  })
+
+  it('names the dispatched tool in the denial', () => {
+    const { call, ctx } = fakeToolsCtx()
+    registerLoopGuard(ctx, deps)
+    const agent = {}
+    call('subagent_implementer', agent)
+    expect(call('ask_user_question', agent, ask)).toContain('subagent_implementer')
+  })
+
+  it('scopes the waiting phase per agent', () => {
+    const { call, ctx } = fakeToolsCtx()
+    registerLoopGuard(ctx, deps)
+    const orchestrator = {}
+    const other = {}
+    call('subagent_reviewer', orchestrator)
+    expect(call('ask_user_question', other, ask)).toBeUndefined()
+    expect(call('ask_user_question', orchestrator, ask)).toContain('waiting phase')
   })
 })

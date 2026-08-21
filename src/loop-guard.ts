@@ -30,6 +30,19 @@ interface Streak {
   count: number
 }
 
+/** 一个 Agent 的 guard 状态。 */
+interface AgentState {
+  streak: Streak
+  /**
+   * 已派出角色子代理、尚未做任何实质工作。
+   *
+   * 这是"等待期"的判据。派发角色工具置位；`list_agents` 与 {@link ASK_TOOL} 都不
+   * 清除它（它们不是工作，正是编排者用来假装等待的两个工具）；任何其他工具调用
+   * 清除它——读文件、改文件、跑命令都说明它已经在处理回报而不是在等。
+   */
+  awaitingDispatch: boolean
+}
+
 /**
  * 轮询超限的拒绝理由。
  *
@@ -73,6 +86,27 @@ function denyDuplicateReviewer(tool: string): string {
 }
 
 /**
+ * 等待期内提问的拒绝理由。
+ *
+ * 第四种假等待形态，也是最难拦的一种：问题带着两个像样的选项（"继续等待" /
+ * "中止流水线"），既不是空列表，也不与前一次调用相邻。真实会话里编排者在同一个
+ * turn 里问了四次「子代理长时间未返回，你希望继续等待还是中止？」，把等待责任推给
+ * 用户，而流水线的承诺是规格落盘后零打扰。
+ * @param tool - 触发等待期的角色工具名。
+ * @returns 面向模型的拒绝文本。
+ */
+function denyAskWhileWaiting(tool: string): string {
+  return `You dispatched ${tool} and have done no work since; you are in the waiting phase. `
+    + 'Asking the user anything here hands them your job: they cannot make the subagent finish '
+    + 'sooner, and this pipeline promises no interruptions between the spec landing and the '
+    + 'final report. A subagent taking a long time is not a decision point — it is the normal '
+    + 'case. END YOUR RESPONSE NOW: one sentence naming what you dispatched, no tool call. '
+    + 'The runtime wakes you when it settles. If you genuinely believe the subagent is dead, '
+    + 'check list_agents once: `running` means keep waiting, and anything else has a defined '
+    + 'handling in the convergence protocol that does not involve asking the user.'
+}
+
+/**
  * 空问题的拒绝理由。
  *
  * `options: []` 语义上是"这里有一份选项列表，但列表是空的"——无效调用。真正需要
@@ -96,6 +130,12 @@ function denyEmptyQuestion(): string {
 export interface LoopGuardDeps {
   /** `list_agents` 允许的连续调用次数；超过即拒绝。 */
   readonly listingLimit: () => number
+  /**
+   * 当前挂载的**全部**角色工具名（implementer / reviewer / researcher，含 alias 后缀）。
+   *
+   * 用于判定"等待期"：任何一个被调用即置位，之后到做出实质工作之前不允许提问。
+   */
+  readonly roleToolNames: () => readonly string[]
   /**
    * 当前挂载的 reviewer 角色工具名。
    *
@@ -121,20 +161,26 @@ export interface LoopGuardDeps {
  * @returns 取消注册的 disposer。
  */
 export function registerLoopGuard(ctx: Context, deps: LoopGuardDeps): () => void {
-  const perAgent = new WeakMap<object, Streak>()
-  let agentless: Streak = { tool: '', count: 0 }
+  const perAgent = new WeakMap<object, AgentState>()
+  let agentless: AgentState = { streak: { tool: '', count: 0 }, awaitingDispatch: false }
 
   return ctx.tools.guard(execution => {
     const agent = execution.agent
     const previous = agent === undefined ? agentless : perAgent.get(agent)
-    const streak: Streak = previous?.tool === execution.name
-      ? { tool: execution.name, count: previous.count + 1 }
+    const streak: Streak = previous?.streak.tool === execution.name
+      ? { tool: execution.name, count: previous.streak.count + 1 }
       // 换了工具就不是在重复了。重置为 1 而不是累加：一次别的调用足以证明它在推进。
       : { tool: execution.name, count: 1 }
-    if (agent === undefined) agentless = streak
-    else perAgent.set(agent, streak)
+    const dispatched = deps.roleToolNames().includes(execution.name)
+    const idle = execution.name === LISTING_TOOL || execution.name === ASK_TOOL
+    const awaitingDispatch = dispatched ? true : idle ? previous?.awaitingDispatch === true : false
+    const state: AgentState = { streak, awaitingDispatch }
+    if (agent === undefined) agentless = state
+    else perAgent.set(agent, state)
 
     if (execution.name === ASK_TOOL) {
+      // 先判等待期：它比空列表更常见，且拒绝理由更贴近当下该做的事。
+      if (previous?.awaitingDispatch === true) return denyAskWhileWaiting(previous.streak.tool)
       const args = execution.arguments as { questions?: readonly { options?: readonly unknown[] }[] }
       // 只看显式给出的空列表；省略 `options` 是合法的自由输入题。
       const empty = args.questions?.some(q => q.options !== undefined && q.options.length === 0)
