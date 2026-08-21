@@ -237,6 +237,20 @@ B1」写进去等于向自己声明这件事由自己做。真实会话里编排
 之外的文件）会误伤把本插件装在常规会话里、直接让主 agent 改代码的正常用法，所以没有
 采用。
 
+### 与 goal 循环的关系
+
+宿主的 goal 机制（`create_goal` / `get_goal` / `update_goal`）会在目标未完成时**每轮
+自动唤醒 agent**，投递一条 `<goal_round>` 消息。这与本流水线的等待语义直接冲突：编排
+者派出子代理后正确地结束了本轮，goal 立刻把它叫醒，它只能查一次状态、发现还在跑、再
+写一次交班记录——真实会话里这样连转了 12 轮，每轮都是干净的 `completed`，一步没进。
+
+skill 正文因此要求：收到过 `<goal_round>` 就说明有活跃 goal，**派出子代理后先
+`update_goal(goal_id, revision, action: "pause")` 再写交班记录**，回报到达后 `resume`。
+子代理的结算通知是独立机制，不受 goal 暂停影响。
+
+正文另有一条：**不要为这条流水线创建 goal**。宿主允许模型推断「长期任务意图」并自动
+`create_goal`，而流水线本身就是事件驱动的，叠加 goal 只会在等待期间反复空转。
+
 ## 循环卫生 guard：拦截 `list_agents` 轮询
 
 `loopGuard.enabled`（默认 `true`）开启时，`ctx.tools.guard()` 跟踪每个 agent 最近一个

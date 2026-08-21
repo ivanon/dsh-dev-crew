@@ -94,3 +94,30 @@ describe('tool field names quoted in skill bodies', () => {
     }
   })
 })
+
+describe('goal loop interaction', () => {
+  const body = (name: string): string => {
+    const found = SKILL_CONTENTS[name]
+    if (found === undefined) throw new Error(`no skill content for "${name}"`)
+    return found
+  }
+
+  it('tells the orchestrator to pause an active goal before waiting', () => {
+    // goal 循环每轮自动唤醒 agent。真实会话里编排者每轮都正确结束（12 个干净的
+    // completed），但 goal 立刻把它叫醒，于是每轮只够查一次状态再写一次交班记录，
+    // 一步没进。
+    const text = body('crew-converge')
+    expect(text).toContain('update_goal')
+    expect(text).toContain('pause')
+    expect(text).toContain('resume')
+  })
+
+  it('warns against creating a goal for the pipeline', () => {
+    // 宿主允许模型推断长期任务意图并自动 create_goal，而流水线本身是事件驱动的。
+    expect(body('crew-converge')).toContain('create_goal')
+  })
+
+  it('points crew.md at the same rule', () => {
+    expect(body('crew')).toContain('goal_round')
+  })
+})
