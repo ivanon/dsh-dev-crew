@@ -152,7 +152,11 @@ export function apply(ctx: Context, config: ConfigType): void {
   // 最长连续 149 次，直到模型额度耗尽。与 gate.enabled 同理，这里也在挂载时读一次。
   if (config.loopGuard.enabled) {
     ctx.effect(() => registerLoopGuard(ctx, {
-      limit: () => current.loopGuard.maxConsecutiveAgentListings,
+      listingLimit: () => current.loopGuard.maxConsecutiveAgentListings,
+      // 与 gate 的 implementerToolNames 同一条命名规则：精确匹配，不能用
+      // startsWith('subagent_reviewer')，那会把自定义角色 `reviewer-v2` 也算进来。
+      reviewerToolNames: () => coordinator.mountedToolNames()
+        .filter(name => name === 'subagent_reviewer' || name.startsWith('subagent_reviewer_')),
     }))
   }
 
